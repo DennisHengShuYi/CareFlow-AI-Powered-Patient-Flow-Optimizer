@@ -1,7 +1,11 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import LayoutSidebar from '../components/LayoutSidebar';
-import { Filter, Mic, CircleDot, UserPlus, Search } from 'lucide-react';
+import { capacityRoomStyle } from '../utils/capacityRoomStyle';
+import { Filter, Mic, CircleDot, UserPlus, Search, LayoutGrid, Users } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+
+const API = 'http://127.0.0.1:8000';
 
 const MOCK_DB_PATIENTS = [
   { name: "John Doe", complaint: "Persistent lower back pain", level: 3 },
@@ -11,15 +15,6 @@ const MOCK_DB_PATIENTS = [
   { name: "Michael Chen", complaint: "High fever, chills, body ache", level: 2 }
 ];
 
-const MOCK_DEPARTMENTS = ["Triage Queue", "Cardiology", "General Surgery", "Minor Injuries", "Neurology", "Orthopedics"];
-const MOCK_DOCTORS = [
-  { name: "Unassigned", dept: "Triage Queue" },
-  { name: "Dr. Smith", dept: "Cardiology" },
-  { name: "Dr. Jones", dept: "General Surgery" },
-  { name: "Dr. Taylor", dept: "Minor Injuries" },
-  { name: "Dr. Khoo", dept: "Neurology" },
-  { name: "Dr. Lee", dept: "Orthopedics" }
-];
 const staffData = [
   { label: 'DOCTORS', current: 4, total: 6, color: 'var(--primary)' },
   { label: 'NURSES', current: 12, total: 15, color: '#6366f1' },
@@ -43,6 +38,13 @@ export default function LiveTriage() {
   const [newComplaint, setNewComplaint] = useState("");
   const [newLevel, setNewLevel] = useState<number>(3);
   const [isNewPatientMode, setIsNewPatientMode] = useState(false);
+
+  const [dashboardTab, setDashboardTab] = useState<'flow' | 'capacity'>('flow');
+  const [boardData, setBoardData] = useState<{ departments: any[] } | null>(null);
+  const [facilityCatalog, setFacilityCatalog] = useState<{ departments: string[]; doctors: { name: string; department: string }[] }>({
+    departments: [],
+    doctors: [],
+  });
 
   const [showOverrideModal, setShowOverrideModal] = useState(false);
   const [overridePatient, setOverridePatient] = useState<any>(null);
@@ -85,7 +87,7 @@ export default function LiveTriage() {
     }
 
     try {
-      await fetch(`http://127.0.0.1:8000/api/triage/patient/${overridePatient.id}`, {
+      await fetch(`${API}/api/triage/patient/${overridePatient.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -105,14 +107,25 @@ export default function LiveTriage() {
   };
 
   const fetchData = () => {
-    fetch('http://127.0.0.1:8000/api/triage/overview')
-      .then(res => res.json())
-      .then(d => {
-        setData(d);
+    Promise.all([
+      fetch(`${API}/api/triage/overview`).then((r) => r.json()),
+      fetch(`${API}/api/capacity/board`)
+        .then((r) => r.json())
+        .catch(() => ({ departments: [] })),
+      fetch(`${API}/api/capacity/catalog`)
+        .then((r) => r.json())
+        .catch(() => ({ departments: [], doctors: [] })),
+    ])
+      .then(([overview, board, catalog]) => {
+        setData(overview);
+        setBoardData(board);
+        setFacilityCatalog({
+          departments: catalog.departments || [],
+          doctors: catalog.doctors || [],
+        });
         setLoading(false);
-        // Do not overwrite assessmentPlan if the user is typing, but if active encounter changes, we might want to clear it
       })
-      .catch(err => {
+      .catch((err) => {
         console.error(err);
         setLoading(false);
       });
@@ -135,7 +148,7 @@ export default function LiveTriage() {
     };
 
     try {
-      await fetch('http://127.0.0.1:8000/api/triage/simulate', {
+      await fetch(`${API}/api/triage/simulate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newPatientData)
@@ -152,7 +165,7 @@ export default function LiveTriage() {
 
   const handleSelectPatient = async (patientId: string) => {
     try {
-      await fetch('http://127.0.0.1:8000/api/triage/active_encounter', {
+      await fetch(`${API}/api/triage/active_encounter`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ patient_id: patientId })
@@ -169,7 +182,7 @@ export default function LiveTriage() {
 
   const handleSignNote = async () => {
     try {
-      await fetch('http://127.0.0.1:8000/api/triage/sign_note', {
+      await fetch(`${API}/api/triage/sign_note`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ assessment_plan: `Assessment:\n${assessment}\n\nPlan:\n${plan}`, objective: objectiveNote })
@@ -196,6 +209,9 @@ export default function LiveTriage() {
 
   if (!data) return null;
 
+  const overrideDeptOptions = [...new Set(['Triage Queue', ...facilityCatalog.departments])];
+  const overrideDocOptions = [{ name: 'Unassigned', department: 'Triage Queue' }, ...facilityCatalog.doctors];
+
   const currentUtilization = Math.min(100, Math.round((data.queue_active / 20) * 100));
   
   const chartData = [
@@ -219,10 +235,54 @@ export default function LiveTriage() {
       <div style={{ padding: '2rem 3rem', height: '100%', display: 'flex', flexDirection: 'column' }}>
         
         {/* Header Section */}
-        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '2rem' }}>
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '2rem', flexWrap: 'wrap', gap: '1.5rem' }}>
           <div>
             <h1 style={{ fontSize: '2.5rem', fontWeight: 700, letterSpacing: '-0.02em', marginBottom: '0.25rem' }}>Active Duty</h1>
-            <p style={{ fontSize: '0.875rem', textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-muted)' }}>Live Clinical Overview</p>
+            <p style={{ fontSize: '0.875rem', textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-muted)', marginBottom: '1rem' }}>Live Clinical Overview</p>
+            {viewMode === 'queue' && (
+              <div style={{ display: 'inline-flex', background: 'var(--neutral-200)', borderRadius: '12px', padding: '4px', gap: '4px' }}>
+                <button
+                  type="button"
+                  onClick={() => setDashboardTab('flow')}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    padding: '0.5rem 1rem',
+                    borderRadius: '10px',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontWeight: 700,
+                    fontSize: '0.875rem',
+                    background: dashboardTab === 'flow' ? 'white' : 'transparent',
+                    color: dashboardTab === 'flow' ? 'var(--primary)' : 'var(--text-muted)',
+                    boxShadow: dashboardTab === 'flow' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+                  }}
+                >
+                  <Users size={16} /> Patient flow
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDashboardTab('capacity')}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    padding: '0.5rem 1rem',
+                    borderRadius: '10px',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontWeight: 700,
+                    fontSize: '0.875rem',
+                    background: dashboardTab === 'capacity' ? 'white' : 'transparent',
+                    color: dashboardTab === 'capacity' ? 'var(--primary)' : 'var(--text-muted)',
+                    boxShadow: dashboardTab === 'capacity' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+                  }}
+                >
+                  <LayoutGrid size={16} /> Capacity
+                </button>
+              </div>
+            )}
           </div>
           <div style={{ display: 'flex', gap: '1rem' }}>
             <button 
@@ -258,7 +318,7 @@ export default function LiveTriage() {
         <div style={{ display: 'flex', gap: '2rem', flex: 1, minHeight: 0, flexWrap: 'wrap' }}>
           
           {/* Queue View */}
-          {viewMode === 'queue' && (
+          {viewMode === 'queue' && dashboardTab === 'flow' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem', flex: 1, minWidth: 0 }}>
               <div className="card" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                 <div style={{ marginBottom: '1.5rem' }}>
@@ -324,25 +384,45 @@ export default function LiveTriage() {
 
                   return (
                     <>
-                      {displayedPatients.map((patient: any, idx: number) => {
+                      {displayedPatients.map((patient: any) => {
                         const isCritical = patient.level === 1;
+                        const isActiveEncounter =
+                          !!(data.active_encounter?.id && patient.id === data.active_encounter.id);
                   return (
                     <div 
-                      key={idx} 
+                      key={patient.id} 
                       onClick={() => handleSelectPatient(patient.id)}
                       style={{ 
                         background: isCritical ? '#fffcfc' : 'white', 
-                        border: isCritical ? '2px solid #ba1a1a' : '1px solid var(--neutral-400)',
-                        borderLeft: isCritical ? '6px solid #ba1a1a' : '1px solid var(--neutral-400)',
+                        border: isActiveEncounter
+                          ? '2px solid var(--primary)'
+                          : isCritical
+                            ? '2px solid #ba1a1a'
+                            : '1px solid var(--neutral-400)',
+                        borderLeft: isActiveEncounter
+                          ? '6px solid var(--primary)'
+                          : isCritical
+                            ? '6px solid #ba1a1a'
+                            : '1px solid var(--neutral-400)',
                         borderRadius: '12px', padding: '1rem', 
                         display: 'grid', gridTemplateColumns: '1fr 1.5fr 2fr 1fr auto', alignItems: 'center', gap: '1rem',
-                        boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
+                        boxShadow: isActiveEncounter ? '0 0 0 3px rgba(59, 130, 246, 0.2)' : '0 2px 4px rgba(0,0,0,0.05)',
                         cursor: 'pointer',
                         transition: 'all 0.2s',
                         position: 'relative'
                       }}
-                      onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)'; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.05)'; }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.transform = 'translateY(-2px)';
+                        e.currentTarget.style.boxShadow = isActiveEncounter
+                          ? '0 0 0 3px rgba(59, 130, 246, 0.28), 0 4px 12px rgba(0,0,0,0.1)'
+                          : '0 4px 12px rgba(0,0,0,0.1)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.transform = 'none';
+                        e.currentTarget.style.boxShadow = isActiveEncounter
+                          ? '0 0 0 3px rgba(59, 130, 246, 0.2)'
+                          : '0 2px 4px rgba(0,0,0,0.05)';
+                      }}
                     >
                       <div>
                         <div style={{ color: isCritical ? '#ba1a1a' : (patient.level === 2 ? 'var(--secondary)' : 'var(--primary)'), fontSize: '0.875rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
@@ -365,6 +445,9 @@ export default function LiveTriage() {
                       <div>
                         <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>{patient.department || 'Triage'}</div>
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{patient.assigned_doctor || 'Unassigned'} • {patient.status}</div>
+                        {isActiveEncounter && (
+                          <div style={{ marginTop: '0.35rem', fontSize: '0.65rem', fontWeight: 800, color: 'var(--primary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Active encounter</div>
+                        )}
                       </div>
                       <div style={{ textAlign: 'right' }}>
                         <button 
@@ -433,7 +516,7 @@ export default function LiveTriage() {
                         <Tooltip 
                           contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
                           itemStyle={{ color: 'var(--primary)', fontWeight: 700 }}
-                          formatter={(value: number) => [`${value}%`, 'Utilization']}
+                          formatter={(value) => [`${Number(value ?? 0)}%`, 'Utilization']}
                         />
                         <Area type="monotone" dataKey="utilization" stroke="var(--primary)" strokeWidth={3} fillOpacity={1} fill="url(#colorUv)" />
                       </AreaChart>
@@ -464,7 +547,7 @@ export default function LiveTriage() {
                         <Tooltip 
                           contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
                           itemStyle={{ fontWeight: 700, color: 'var(--text-main)' }}
-                          formatter={(value: number) => [`${value}%`, 'Conversion']}
+                          formatter={(value) => [`${Number(value ?? 0)}%`, 'Conversion']}
                         />
                       </PieChart>
                     </ResponsiveContainer>
@@ -510,6 +593,104 @@ export default function LiveTriage() {
                 </div>
               </div>
           
+              </div>
+            </div>
+          )}
+
+          {viewMode === 'queue' && dashboardTab === 'capacity' && (
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+                <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--text-muted)', maxWidth: '720px' }}>
+                  {
+                    "Each room lists patients who match that room's department and assigned doctor. In session means status is In Consult or In Resus. Other statuses (e.g. Awaiting Labs, Room 4) count as the waiting list. Opening an encounter sets that patient to In Consult; the previous In Consult patient returns to Waiting for Doctor. "
+                  }
+                  <Link to="/departments" style={{ color: 'var(--primary)', fontWeight: 700 }}>Departments</Link>
+                  {' '}for room staffing.
+                </p>
+              </div>
+              <div style={{ flex: 1, overflowY: 'auto', paddingRight: '0.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                {(boardData?.departments || []).map((dept: any) => (
+                  <div key={dept.id} className="card" style={{ padding: '1.5rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '1rem' }}>
+                      <h2 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0 }}>{dept.name}</h2>
+                      <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                        <span className="card" style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem', fontWeight: 700, borderRadius: '9999px' }}>
+                          In session {dept.metrics?.rooms_occupied ?? 0} · Waiting list {dept.metrics?.rooms_with_queue ?? 0} · Open {dept.metrics?.rooms_ready ?? 0}
+                        </span>
+                        <span className="card" style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem', fontWeight: 700, borderRadius: '9999px' }}>
+                          {dept.metrics?.doctors_in_consult ?? 0}/{dept.metrics?.doctors_total ?? 0} doctors in consult
+                        </span>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', alignSelf: 'center' }}>
+                          {dept.metrics?.rooms_staffed ?? 0} staffed rooms
+                        </span>
+                      </div>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '1rem' }}>
+                      {(dept.rooms || []).map((room: any) => {
+                        const rs = capacityRoomStyle(room.state);
+                        return (
+                          <div
+                            key={room.id}
+                            style={{
+                              border: `1px solid var(--neutral-400)`,
+                              borderRadius: '12px',
+                              padding: '1rem',
+                              background: rs.bg,
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem', gap: '0.5rem' }}>
+                              <span style={{ fontWeight: 800, fontSize: '0.95rem' }}>{room.label}</span>
+                              <div style={{ textAlign: 'right' }}>
+                                <div style={{ fontSize: '0.7rem', fontWeight: 800, textTransform: 'uppercase', color: rs.color }}>{rs.label}</div>
+                                <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 600, maxWidth: '140px' }}>{rs.hint}</div>
+                              </div>
+                            </div>
+                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+                              {room.doctor_name ? (
+                                <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>{room.doctor_name}</span>
+                              ) : (
+                                <span>No clinician assigned</span>
+                              )}
+                            </div>
+                            {room.in_consult?.length > 0 && (
+                              <div style={{ marginBottom: '0.75rem' }}>
+                                <div style={{ fontSize: '0.65rem', fontWeight: 800, letterSpacing: '0.06em', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>IN CONSULT</div>
+                                <ul style={{ margin: 0, paddingLeft: '1.1rem', fontSize: '0.85rem', fontWeight: 600 }}>
+                                  {room.in_consult.map((p: any) => (
+                                    <li key={p.id}>
+                                      {p.name}{' '}
+                                      <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>({p.status})</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                            <div>
+                              <div style={{ fontSize: '0.65rem', fontWeight: 800, letterSpacing: '0.06em', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>PATIENT QUEUE</div>
+                              {room.queue?.length ? (
+                                <ol style={{ margin: 0, paddingLeft: '1.1rem', fontSize: '0.85rem', fontWeight: 600 }}>
+                                  {room.queue.map((p: any) => (
+                                    <li key={p.id}>
+                                      {p.name}{' '}
+                                      <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>({p.status})</span>
+                                    </li>
+                                  ))}
+                                </ol>
+                              ) : (
+                                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>No patients waiting</div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+                {(!boardData?.departments || boardData.departments.length === 0) && (
+                  <div className="card" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                    No capacity data. Confirm the API is running at {API}.
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -776,9 +957,9 @@ export default function LiveTriage() {
                     placeholder="Search dept..."
                     style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--neutral-400)', fontSize: '0.875rem', outline: 'none', background: 'var(--neutral-100)' }} 
                   />
-                  {overrideDept.length > 0 && MOCK_DEPARTMENTS.filter(d => d.toLowerCase().includes(overrideDept.toLowerCase()) && d !== overrideDept).length > 0 && (
+                  {overrideDept.length > 0 && overrideDeptOptions.filter(d => d.toLowerCase().includes(overrideDept.toLowerCase()) && d !== overrideDept).length > 0 && (
                     <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid var(--neutral-400)', borderRadius: '8px', marginTop: '4px', zIndex: 10, boxShadow: '0 4px 12px rgba(0,0,0,0.1)', overflow: 'hidden' }}>
-                      {MOCK_DEPARTMENTS.filter(d => d.toLowerCase().includes(overrideDept.toLowerCase()) && d !== overrideDept).map((d, i) => (
+                      {overrideDeptOptions.filter(d => d.toLowerCase().includes(overrideDept.toLowerCase()) && d !== overrideDept).map((d, i) => (
                         <div key={i} onClick={() => setOverrideDept(d)} style={{ padding: '0.5rem 0.75rem', cursor: 'pointer', borderBottom: '1px solid var(--neutral-200)', fontSize: '0.875rem', fontWeight: 600 }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--neutral-200)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>{d}</div>
                       ))}
                     </div>
@@ -795,11 +976,11 @@ export default function LiveTriage() {
                     placeholder="Search doctor..."
                     style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--neutral-400)', fontSize: '0.875rem', outline: 'none', background: 'var(--neutral-100)' }} 
                   />
-                  {overrideDoc.length > 0 && MOCK_DOCTORS.filter(d => d.name.toLowerCase().includes(overrideDoc.toLowerCase()) && d.name !== overrideDoc).length > 0 && (
+                  {overrideDoc.length > 0 && overrideDocOptions.filter(d => d.name.toLowerCase().includes(overrideDoc.toLowerCase()) && d.name !== overrideDoc).length > 0 && (
                     <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid var(--neutral-400)', borderRadius: '8px', marginTop: '4px', zIndex: 10, boxShadow: '0 4px 12px rgba(0,0,0,0.1)', overflow: 'hidden' }}>
-                      {MOCK_DOCTORS.filter(d => d.name.toLowerCase().includes(overrideDoc.toLowerCase()) && d.name !== overrideDoc).map((d, i) => (
-                        <div key={i} onClick={() => { setOverrideDoc(d.name); setOverrideDept(d.dept); }} style={{ padding: '0.5rem 0.75rem', cursor: 'pointer', borderBottom: '1px solid var(--neutral-200)', fontSize: '0.875rem', fontWeight: 600 }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--neutral-200)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
-                          {d.name} <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: '0.75rem' }}>({d.dept})</span>
+                      {overrideDocOptions.filter(d => d.name.toLowerCase().includes(overrideDoc.toLowerCase()) && d.name !== overrideDoc).map((d, i) => (
+                        <div key={i} onClick={() => { setOverrideDoc(d.name); setOverrideDept(d.department); }} style={{ padding: '0.5rem 0.75rem', cursor: 'pointer', borderBottom: '1px solid var(--neutral-200)', fontSize: '0.875rem', fontWeight: 600 }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--neutral-200)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+                          {d.name} <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: '0.75rem' }}>({d.department})</span>
                         </div>
                       ))}
                     </div>

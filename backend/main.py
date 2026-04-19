@@ -1,8 +1,11 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import uuid
 
 app = FastAPI()
+
+IN_ROOM_STATUSES = frozenset({"In Consult", "In Resus"})
 
 # Add CORS middleware to allow the frontend to access the API
 app.add_middleware(
@@ -83,6 +86,221 @@ triage_state = {
     }
 }
 
+# Facility layout: departments, doctors, and room staffing (capacity board + admin UI)
+capacity_state = {
+    "departments": [
+        {"id": "d_card", "name": "Cardiology"},
+        {"id": "d_surg", "name": "General Surgery"},
+        {"id": "d_mi", "name": "Minor Injuries"},
+        {"id": "d_peds", "name": "Department of Pediatricians"},
+    ],
+    "doctors": [
+        {"id": "doc_smith", "name": "Dr. Smith", "department_id": "d_card"},
+        {"id": "doc_jones", "name": "Dr. Jones", "department_id": "d_surg"},
+        {"id": "doc_taylor", "name": "Dr. Taylor", "department_id": "d_mi"},
+    ],
+    "rooms": [
+        {"id": "r_c1", "department_id": "d_card", "label": "Room 1", "doctor_id": "doc_smith"},
+        {"id": "r_c2", "department_id": "d_card", "label": "Room 2", "doctor_id": None},
+        {"id": "r_s1", "department_id": "d_surg", "label": "Room 1", "doctor_id": "doc_jones"},
+        {"id": "r_mi1", "department_id": "d_mi", "label": "Room 1", "doctor_id": "doc_taylor"},
+        {"id": "r_p1", "department_id": "d_peds", "label": "Room 1", "doctor_id": None},
+        {"id": "r_p2", "department_id": "d_peds", "label": "Room 2", "doctor_id": None},
+        {"id": "r_p3", "department_id": "d_peds", "label": "Room 3", "doctor_id": None},
+    ],
+}
+
+
+def _dept_by_id(did: str):
+    return next((d for d in capacity_state["departments"] if d["id"] == did), None)
+
+
+def _doctor_by_id(doc_id: str | None):
+    if not doc_id:
+        return None
+    return next((x for x in capacity_state["doctors"] if x["id"] == doc_id), None)
+
+
+def build_capacity_board():
+    """Merge triage patients into room-level occupancy and per-doctor queues."""
+    patients = triage_state["patients"]
+    out_depts = []
+    for dept in capacity_state["departments"]:
+        rooms_out = []
+        for room in capacity_state["rooms"]:
+            if room["department_id"] != dept["id"]:
+                continue
+            doc = _doctor_by_id(room.get("doctor_id"))
+            doc_name = doc["name"] if doc else None
+            in_room = []
+            waiting = []
+            if doc_name:
+                for p in patients:
+                    if p.get("assigned_doctor") != doc_name:
+                        continue
+                    if p.get("department") != dept["name"]:
+                        continue
+                    if p.get("status") in IN_ROOM_STATUSES:
+                        in_room.append(
+                            {"id": p["id"], "name": p["name"], "status": p["status"], "level": p["level"]}
+                        )
+                    else:
+                        waiting.append(
+                            {"id": p["id"], "name": p["name"], "status": p["status"], "level": p["level"]}
+                        )
+            has_session = len(in_room) > 0
+            has_queue = len(waiting) > 0
+            if not doc_name:
+                room_state = "unstaffed"
+            elif has_session:
+                room_state = "occupied"
+            elif has_queue:
+                room_state = "queued"
+            else:
+                room_state = "ready"
+            rooms_out.append(
+                {
+                    "id": room["id"],
+                    "label": room["label"],
+                    "doctor_id": room.get("doctor_id"),
+                    "doctor_name": doc_name,
+                    "state": room_state,
+                    "in_consult": in_room,
+                    "queue": waiting,
+                }
+            )
+        total_rooms = sum(1 for r in capacity_state["rooms"] if r["department_id"] == dept["id"])
+        staffed = sum(
+            1 for r in capacity_state["rooms"] if r["department_id"] == dept["id"] and r.get("doctor_id")
+        )
+        occ_rooms = sum(1 for ro in rooms_out if ro["state"] == "occupied")
+        queue_rooms = sum(1 for ro in rooms_out if ro["state"] == "queued")
+        ready_rooms = sum(1 for ro in rooms_out if ro["state"] == "ready")
+        doctors_in_dept = [d for d in capacity_state["doctors"] if d["department_id"] == dept["id"]]
+        busy_docs = set()
+        for p in patients:
+            if p.get("status") not in IN_ROOM_STATUSES:
+                continue
+            if p.get("department") != dept["name"]:
+                continue
+            ad = p.get("assigned_doctor")
+            if ad and ad != "Unassigned":
+                busy_docs.add(ad)
+        out_depts.append(
+            {
+                "id": dept["id"],
+                "name": dept["name"],
+                "metrics": {
+                    "rooms_total": total_rooms,
+                    "rooms_occupied": occ_rooms,
+                    "rooms_with_queue": queue_rooms,
+                    "rooms_ready": ready_rooms,
+                    "rooms_staffed": staffed,
+                    "doctors_total": len(doctors_in_dept),
+                    "doctors_in_consult": len(busy_docs),
+                },
+                "rooms": rooms_out,
+            }
+        )
+    return {"departments": out_depts}
+
+
+@app.get("/api/capacity/catalog")
+def capacity_catalog():
+    """Department and doctor names for triage overrides and forms."""
+    return {
+        "departments": [d["name"] for d in capacity_state["departments"]],
+        "doctors": [
+            {
+                "name": d["name"],
+                "department": _dept_by_id(d["department_id"])["name"] if _dept_by_id(d["department_id"]) else "",
+            }
+            for d in capacity_state["doctors"]
+        ],
+    }
+
+
+@app.get("/api/capacity/layout")
+def capacity_layout():
+    """Raw layout for admin screens."""
+    return capacity_state
+
+
+@app.get("/api/capacity/board")
+def capacity_board():
+    return build_capacity_board()
+
+
+class NewDepartmentBody(BaseModel):
+    name: str
+
+
+@app.post("/api/capacity/departments")
+def add_department(body: NewDepartmentBody):
+    nid = "d_" + uuid.uuid4().hex[:8]
+    capacity_state["departments"].append({"id": nid, "name": body.name.strip()})
+    return {"id": nid, "layout": capacity_state}
+
+
+class NewRoomBody(BaseModel):
+    label: str
+
+
+@app.post("/api/capacity/departments/{department_id}/rooms")
+def add_room(department_id: str, body: NewRoomBody):
+    if not _dept_by_id(department_id):
+        return {"error": "department not found"}
+    rid = "r_" + uuid.uuid4().hex[:8]
+    capacity_state["rooms"].append(
+        {"id": rid, "department_id": department_id, "label": body.label.strip(), "doctor_id": None}
+    )
+    return {"id": rid, "layout": capacity_state}
+
+
+class NewDoctorBody(BaseModel):
+    name: str
+    department_id: str
+
+
+@app.post("/api/capacity/doctors")
+def add_doctor(body: NewDoctorBody):
+    if not _dept_by_id(body.department_id):
+        return {"error": "department not found"}
+    did = "doc_" + uuid.uuid4().hex[:8]
+    capacity_state["doctors"].append(
+        {"id": did, "name": body.name.strip(), "department_id": body.department_id}
+    )
+    return {"id": did, "layout": capacity_state}
+
+
+class AssignRoomBody(BaseModel):
+    doctor_id: str | None = None
+
+
+@app.put("/api/capacity/rooms/{room_id}/doctor")
+def assign_room_doctor(room_id: str, body: AssignRoomBody):
+    room = next((r for r in capacity_state["rooms"] if r["id"] == room_id), None)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    if body.doctor_id is not None and body.doctor_id != "":
+        doc = _doctor_by_id(body.doctor_id)
+        if not doc:
+            raise HTTPException(status_code=400, detail="Doctor not found")
+        if doc["department_id"] != room["department_id"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Doctor must belong to the same department as the room",
+            )
+        # Exclusive staffing: a clinician may only be assigned to one room at a time
+        for r in capacity_state["rooms"]:
+            if r["id"] != room_id and r.get("doctor_id") == body.doctor_id:
+                r["doctor_id"] = None
+        room["doctor_id"] = body.doctor_id
+    else:
+        room["doctor_id"] = None
+    return {"layout": capacity_state}
+
+
 @app.get('/api/triage/overview')
 def get_triage_overview():
     triage_state['queue_active'] = len(triage_state['patients'])
@@ -122,6 +340,14 @@ class SetEncounterRequest(BaseModel):
 
 @app.post('/api/triage/active_encounter')
 def set_active_encounter(req: SetEncounterRequest):
+    # Only one live charting session: previous "In Consult" patient returns to the waiting list
+    prev_id = triage_state.get("active_encounter", {}).get("id")
+    if prev_id and prev_id != req.patient_id:
+        prev_p = next((p for p in triage_state["patients"] if p["id"] == prev_id), None)
+        if prev_p and prev_p.get("status") == "In Consult":
+            prev_p["status"] = "Waiting for Doctor"
+            prev_p["status_color"] = "neutral"
+
     patient = next((p for p in triage_state["patients"] if p["id"] == req.patient_id), None)
     if patient:
         triage_state["active_encounter"] = {

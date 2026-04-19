@@ -1,5 +1,5 @@
 import LayoutSidebar from '../components/LayoutSidebar';
-import { Calendar, Video, Stethoscope, ChevronRight, ChevronLeft } from 'lucide-react';
+import { Video, Stethoscope } from 'lucide-react';
 
 export default function Appointments() {
   return (
