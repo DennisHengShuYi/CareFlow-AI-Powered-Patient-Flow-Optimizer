@@ -20,6 +20,11 @@ const MOCK_DOCTORS = [
   { name: "Dr. Khoo", dept: "Neurology" },
   { name: "Dr. Lee", dept: "Orthopedics" }
 ];
+const staffData = [
+  { label: 'DOCTORS', current: 4, total: 6, color: 'var(--primary)' },
+  { label: 'NURSES', current: 12, total: 15, color: '#6366f1' },
+  { label: 'BEDS (ER)', current: 19, total: 20, color: '#ef4444' },
+];
 
 export default function LiveTriage() {
   const [data, setData] = useState<any>(null);
@@ -476,6 +481,35 @@ export default function LiveTriage() {
                   </div>
                 </div>
 
+              <div className="card" style={{ padding: '1.5rem', flex: '1 1 500px' }}>
+                  <h2 style={{ fontSize: '1.25rem', marginBottom: '1.5rem', fontWeight: 700 }}>Current Staffing Load</h2>
+                  <div className="space-y-4">
+                  {staffData.map((item, i) => {
+                    const percent = (item.current / item.total) * 100;
+                    return (
+                      <div key={i} style={{ marginBottom: '1.25rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)' }}>
+                            {item.label}
+                          </span>
+                          <span style={{ fontSize: 12, fontWeight: 600 }}>
+                            {item.current}/{item.total}
+                          </span>
+                        </div>
+                        <div style={{ height: 6, background: 'var(--neutral-300)', borderRadius: 6 }}>
+                          <div style={{
+                            width: `${percent}%`,
+                            height: '100%',
+                            background: item.color,
+                            borderRadius: 6
+                          }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+          
               </div>
             </div>
           )}
