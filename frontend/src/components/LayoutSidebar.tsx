@@ -1,18 +1,23 @@
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, FileText, Building, Calendar, HelpCircle, LogOut } from 'lucide-react';
+import { LayoutDashboard, Users, FileText, Building, Calendar } from 'lucide-react';
 import { SignedIn, SignedOut, UserButton, useClerk } from '@clerk/clerk-react';
+import { useProfile } from '../hooks/useProfile';
+import { ShieldCheck } from 'lucide-react';
 
 export default function LayoutSidebar({ children }: { children: React.ReactNode }) {
   const location = useLocation();
-  const { signOut } = useClerk();
+  const { role, profile, loading: profileLoading } = useProfile();
 
-  const links = [
-    { name: 'Dashboard', path: '/', icon: LayoutDashboard },
-    { name: 'Patient data', path: '/intake', icon: Users },
-    { name: 'Claims', path: '/claims', icon: FileText },
-    { name: 'Departments', path: '/departments', icon: Building },
-    { name: 'Appointments', path: '/appointments', icon: Calendar },
+  const allLinks = [
+    { name: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['hospital_staff'] },
+    { name: 'Patient data', path: '/intake', icon: Users, roles: ['patient'] },
+    { name: 'Claims', path: '/claims', icon: FileText, roles: ['hospital_staff'] },
+    { name: 'Departments', path: '/departments', icon: Building, roles: ['hospital_staff'] },
+    { name: 'Appointments', path: '/appointments', icon: Calendar, roles: ['patient'] },
   ];
+
+  // Filter links based on role
+  const links = allLinks.filter(link => !link.roles || (role && link.roles.includes(role)));
 
   return (
     <div className="layout-app">
@@ -26,19 +31,21 @@ export default function LayoutSidebar({ children }: { children: React.ReactNode 
         borderRight: '1px solid var(--neutral-400)',
         transition: 'width 0.3s ease'
       }}>
-        <div style={{ padding: '0 2rem', marginBottom: '3rem', display: 'flex', alignItems: 'center', gap: '0.75rem', overflow: 'hidden' }}>
+        <div style={{ padding: '0 2rem', marginBottom: '3rem', display: 'flex', alignItems: 'center', gap: '0.75rem', overflow: 'hidden' }} className="center-on-mobile">
           <div style={{ width: '32px', height: '32px', minWidth: '32px', borderRadius: '50%', background: 'var(--primary)', color: 'white', display: 'flex', justifyContent: 'center', alignItems: 'center', fontWeight: 'bold' }}>+</div>
-          <Link to="/landing" style={{ whiteSpace: 'nowrap' }}>
+          <Link to="/landing" style={{ whiteSpace: 'nowrap' }} className="hide-on-mobile">
             <h2 style={{ fontSize: '1.25rem', color: 'var(--secondary)' }}>MediRoute</h2>
             <div style={{ fontSize: '0.65rem', letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Healthcare<br/>Intelligence</div>
           </Link>
         </div>
 
-        <div style={{ padding: '0 1.5rem', marginBottom: '2rem', overflow: 'hidden' }}>
-          <Link to="/intake" className="btn-primary w-full flex items-center justify-center gap-2" style={{ borderRadius: '12px', display: 'flex', textDecoration: 'none', whiteSpace: 'nowrap' }}>
-            <span style={{ fontSize: '1.25rem' }}>+</span> <span>New Analysis</span>
-          </Link>
-        </div>
+        {role === 'patient' && (
+          <div style={{ padding: '0 1.5rem', marginBottom: '2rem', overflow: 'hidden' }} className="center-on-mobile">
+            <Link to="/intake" className="btn-primary w-full flex items-center justify-center gap-2" style={{ borderRadius: '12px', display: 'flex', textDecoration: 'none', whiteSpace: 'nowrap', padding: '0.75rem' }}>
+              <span style={{ fontSize: '1.25rem' }}>+</span> <span className="hide-on-mobile">New Analysis</span>
+            </Link>
+          </div>
+        )}
 
         <nav style={{ flex: 1 }}>
           <ul style={{ listStyle: 'none', padding: 0 }}>
@@ -55,9 +62,9 @@ export default function LayoutSidebar({ children }: { children: React.ReactNode 
                     fontWeight: active ? 600 : 500,
                     whiteSpace: 'nowrap',
                     overflow: 'hidden'
-                  }}>
+                  }} className="center-on-mobile">
                     <div style={{ minWidth: '20px' }}><link.icon size={20} /></div>
-                    <span>{link.name}</span>
+                    <span className="hide-on-mobile">{link.name}</span>
                   </Link>
                 </li>
               );
@@ -66,19 +73,18 @@ export default function LayoutSidebar({ children }: { children: React.ReactNode 
         </nav>
 
         <div style={{ padding: '2rem 1.5rem 0', borderTop: '1px solid var(--neutral-400)', display: 'flex', flexDirection: 'column', gap: '1.5rem', overflow: 'hidden' }}>
-          <div className="flex-col gap-4 text-sm text-muted font-medium ml-2">
-            <Link to="#" className="flex items-center gap-2 hover:text-secondary whitespace-nowrap"><HelpCircle size={18} style={{ minWidth: '18px' }}/> <span>Support</span></Link>
-            <SignedIn>
-              <button onClick={() => signOut()} className="flex items-center gap-2 hover:text-secondary whitespace-nowrap bg-transparent border-none outline-none cursor-pointer text-muted font-medium" style={{ marginTop: '1rem', padding: 0 }}><LogOut size={18} style={{ minWidth: '18px' }}/> <span>Logout</span></button>
-            </SignedIn>
-          </div>
           
           <SignedIn>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 center-on-mobile">
               <UserButton />
-              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                <div className="text-sm font-bold" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Authorized User</div>
-                <div className="text-xs text-muted" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>System Ready</div>
+              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }} className="hide-on-mobile">
+                <div className="text-sm font-bold" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {profile?.full_name || 'Authorized User'}
+                </div>
+                <div className="text-xs text-muted font-medium flex items-center gap-1">
+                  <ShieldCheck size={12} className="text-primary" />
+                  {role === 'hospital_staff' ? 'Medical Staff' : 'Patient Account'}
+                </div>
               </div>
             </div>
           </SignedIn>

@@ -1,23 +1,71 @@
-import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
-import { SignIn, SignUp, SignedIn, SignedOut, RedirectToSignIn } from '@clerk/clerk-react';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { SignIn, SignUp, SignedIn, SignedOut, RedirectToSignIn, useUser } from '@clerk/clerk-react';
+import React, { useState, useEffect } from 'react';
+import { supabase } from './lib/supabase';
 import LiveTriage from './pages/LiveTriage';
 import Landing from './pages/Landing';
 import Claims from './pages/Claims';
 import Intake from './pages/Intake';
 import Departments from './pages/Departments';
 import Appointments from './pages/Appointments';
+import Onboarding from './pages/Onboarding';
+import { useProfile } from './hooks/useProfile';
+import { Loader2 } from 'lucide-react';
+
+// A dispatcher component for the root path '/'
+function HomeDispatcher() {
+  const { role, loading } = useProfile();
+  
+  if (loading) {
+    return (
+      <div style={{ height: '100vh', width: '100vw', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-gradient)' }}>
+        <Loader2 size={40} className="animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (role === 'patient') {
+    return <Navigate to="/intake" replace />;
+  }
+
+  return <LiveTriage />;
+}
 
 // A wrapper for protecting routes that require authentication.
-// If the user is unauthenticated, they will be instantly redirected to the login page.
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  return (
-    <>
-      <SignedIn>{children}</SignedIn>
-      <SignedOut>
-        <RedirectToSignIn signInUrl="/sign-in" />
-      </SignedOut>
-    </>
-  );
+function ProtectedRoute({ children, allowedRoles }: { children: React.ReactNode, allowedRoles?: string[] }) {
+  const { isLoaded, isSignedIn } = useUser();
+  const { role, profile, loading: profileLoading } = useProfile();
+  const navigate = useNavigate();
+
+  // If still loading Clerk or Supabase profile
+  if (!isLoaded || (isSignedIn && profileLoading)) {
+    return (
+      <div style={{ height: '100vh', width: '100vw', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-gradient)' }}>
+        <Loader2 size={40} className="animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  // If not signed in at all
+  if (!isSignedIn) {
+    return <RedirectToSignIn signInUrl="/sign-in" />;
+  }
+
+  // If signed in but no profile (hasn't picked a role)
+  if (isSignedIn && !profile && !profileLoading) {
+    const isAtOnboarding = window.location.pathname === '/onboarding';
+    if (!isAtOnboarding) {
+       return <Navigate to="/onboarding" />;
+    }
+  }
+
+  // Role-based access control
+  if (allowedRoles && role && !allowedRoles.includes(role)) {
+    // Redirect to their respective home if they try to access a forbidden page
+    return <Navigate to={role === 'patient' ? '/intake' : '/'} replace />;
+  }
+
+  return <>{children}</>;
 }
 
 function App() {
@@ -77,7 +125,7 @@ function App() {
                     colorBackground: '#ffffff',
                     fontFamily: '"Inter", sans-serif',
                   },
-                  elements: {
+                  Elements: {
                     card: {
                       boxShadow: '0 20px 40px rgba(227, 242, 253, 0.8)',
                       border: '1px solid var(--neutral-400)',
@@ -95,12 +143,20 @@ function App() {
           } 
         />
 
-        {/* Application Routes - Wrapped in ProtectedRoute to enforce login */}
-        <Route path="/" element={<ProtectedRoute><LiveTriage /></ProtectedRoute>} />
-        <Route path="/claims" element={<ProtectedRoute><Claims /></ProtectedRoute>} />
-        <Route path="/intake" element={<ProtectedRoute><Intake /></ProtectedRoute>} />
-        <Route path="/departments" element={<ProtectedRoute><Departments /></ProtectedRoute>} />
-        <Route path="/appointments" element={<ProtectedRoute><Appointments /></ProtectedRoute>} />
+        {/* Application Routes - Wrapped in ProtectedRoute to enforce login and roles */}
+        <Route path="/onboarding" element={<ProtectedRoute><Onboarding /></ProtectedRoute>} />
+        
+        {/* Hospital Staff Routes */}
+        <Route path="/" element={<ProtectedRoute allowedRoles={['hospital_staff']}><HomeDispatcher /></ProtectedRoute>} />
+        <Route path="/claims" element={<ProtectedRoute allowedRoles={['hospital_staff']}><Claims /></ProtectedRoute>} />
+        
+        {/* Patient Routes */}
+        <Route path="/intake" element={<ProtectedRoute allowedRoles={['patient']}><Intake /></ProtectedRoute>} />
+        <Route path="/departments" element={<ProtectedRoute allowedRoles={['patient']}><Departments /></ProtectedRoute>} />
+        <Route path="/appointments" element={<ProtectedRoute allowedRoles={['patient']}><Appointments /></ProtectedRoute>} />
+        
+        {/* Fallback */}
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
   );

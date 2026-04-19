@@ -3,6 +3,8 @@ import LayoutSidebar from '../components/LayoutSidebar';
 import { Link } from 'react-router-dom';
 import { ShieldAlert, HeartPulse, MapPin, CheckCircle2, ChevronRight, ChevronLeft, ArrowLeft, ArrowRight, Mic, Upload, Type, Loader2, X, FileText } from 'lucide-react';
 import { useAuth } from '@clerk/clerk-react';
+import { useProfile } from '../hooks/useProfile';
+import { supabase } from '../lib/supabase';
 
 export default function Intake() {
   const { getToken } = useAuth();
@@ -28,6 +30,46 @@ export default function Intake() {
   const [attachedDocContent, setAttachedDocContent] = useState<string | null>(null);
   const [attachedDocName, setAttachedDocName] = useState<string | null>(null);
 
+  // Recommendation State
+  const { profile } = useProfile();
+  const [recommendation, setRecommendation] = useState<any>(null);
+
+  const fetchRecommendations = async (triage: any) => {
+    if (!profile?.location) return;
+
+    try {
+      // 1. Fetch hospitals near the user's location
+      // Simple keyword match for now
+      const area = profile.location.split(' - ')[0] || profile.location;
+      
+      const { data: hospitals, error: hError } = await supabase
+        .from('hospitals')
+        .select('*, departments(*)')
+        .ilike('address', `%${area}%`);
+
+      if (hError) throw hError;
+      if (!hospitals || hospitals.length === 0) return;
+
+      // 2. Rank by specialty match
+      const specialty = triage.recommended_specialist?.toLowerCase() || '';
+      
+      const scoredHospitals = hospitals.map(h => {
+        let score = 0;
+        const hasSpecialty = h.departments?.some((d: any) => 
+          specialty.includes(d.name.toLowerCase()) || d.name.toLowerCase().includes(specialty)
+        );
+        if (hasSpecialty) score += 10;
+        return { ...h, score, hasSpecialty };
+      });
+
+      // Sort by score and take the best one
+      const best = scoredHospitals.sort((a, b) => b.score - a.score)[0];
+      setRecommendation(best);
+    } catch (err) {
+      console.error('Error fetching recommendations:', err);
+    }
+  };
+
   const resetIntake = () => {
     setStep(1);
     setSessionId(null);
@@ -38,6 +80,7 @@ export default function Intake() {
     setFollowUpResponse('');
     setIsFollowingUp(false);
     setInputMode('text');
+    setRecommendation(null);
   };
 
   const processTriageText = async (text: string) => {
@@ -52,7 +95,7 @@ export default function Intake() {
         },
         body: JSON.stringify({ 
           text,
-          session_id: sessionId // Pass existing session if any
+          session_id: sessionId 
         })
       });
       if (!res.ok) throw new Error('Failed to process text');
@@ -63,6 +106,11 @@ export default function Intake() {
       setNextAction(data.next_action);
       setQuestion(data.question);
       
+      // Calculate recommendations
+      if (data.triage) {
+        fetchRecommendations(data.triage);
+      }
+
       setStep(2);
       setIsFollowingUp(false);
       setFollowUpResponse('');
@@ -195,7 +243,7 @@ export default function Intake() {
 
   return (
     <LayoutSidebar>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2rem 1rem', minHeight: '100%' }}>
+      <div className="responsive-padding" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minHeight: '100%' }}>
 
         <div style={{ alignSelf: 'flex-end', marginBottom: '2rem' }}>
           <div style={{ display: 'flex', background: 'var(--neutral-300)', borderRadius: '9999px', padding: '0.25rem', border: '1px solid var(--neutral-400)' }}>
@@ -206,8 +254,8 @@ export default function Intake() {
         </div>
 
         {step === 1 && (
-          <div className="card" style={{ width: '100%', maxWidth: '800px', padding: '3rem', display: 'flex', flexDirection: 'column' }}>
-            <h1 style={{ fontSize: '2rem', fontWeight: 800, marginBottom: '1rem' }}>How can we help today?</h1>
+          <div className="card" style={{ width: '100%', maxWidth: '800px', padding: 'var(--container-gap)', display: 'flex', flexDirection: 'column' }}>
+            <h1 style={{ fontSize: 'var(--font-h1)', fontWeight: 800, marginBottom: '1rem' }}>How can we help today?</h1>
             <p style={{ color: 'var(--text-muted)', marginBottom: '2rem' }}>
               Describe your symptoms naturally in English or Bahasa Malaysia. You can type, speak, or upload a medical document.
             </p>
@@ -299,8 +347,8 @@ export default function Intake() {
         )}
 
         {step === 2 && triageData && (
-          <div className="card" style={{ width: '100%', maxWidth: '1000px', display: 'flex', flexDirection: 'column', padding: '3rem' }}>
-            <h1 style={{ fontSize: '2.5rem', fontWeight: 800, marginBottom: '1rem' }}>LLM Triage Complete</h1>
+          <div className="card" style={{ width: '100%', maxWidth: '1000px', display: 'flex', flexDirection: 'column', padding: 'var(--container-gap)' }}>
+            <h1 style={{ fontSize: 'var(--font-h1)', fontWeight: 800, marginBottom: '1rem' }}>LLM Triage Complete</h1>
             <p style={{ fontSize: '1.125rem', color: 'var(--text-muted)', marginBottom: '3rem', maxWidth: '650px', lineHeight: 1.6 }}>
               Based on your multi-modal symptom intake, the Triage Engine has assigned an urgency score and requested optimal care.
             </p>
@@ -310,8 +358,8 @@ export default function Intake() {
               <div style={{ background: 'var(--neutral-200)', borderRadius: '1rem', padding: '2rem', display: 'flex', flexDirection: 'column' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem' }}>
                   <div>
-                    <div style={{ fontSize: '0.75rem', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>ASSESSMENT</div>
-                    <h2 style={{ fontSize: '1.5rem', fontWeight: 800 }}>AI Triage<br/>Summary</h2>
+                    <div style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>ASSESSMENT</div>
+                    <h2 style={{ fontSize: 'var(--font-h2)', fontWeight: 800 }}>AI Triage<br/>Summary</h2>
                   </div>
                   <div style={{ background: triageData.urgency_score === 'P1' ? '#ffcdd2' : 'linear-gradient(90deg, #A2C9FF, #759EFD)', color: triageData.urgency_score === 'P1' ? '#c62828' : 'var(--secondary)', display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1rem', borderRadius: '9999px', fontSize: '0.875rem', fontWeight: 700 }}>
                     <ShieldAlert size={16} /> Urgency: {triageData.urgency_score}
@@ -323,7 +371,7 @@ export default function Intake() {
                   <div style={{ fontWeight: 500, fontSize: '0.875rem', lineHeight: 1.5 }}>{triageData.chief_complaint}</div>
                 </div>
 
-                <div style={{ background: 'white', borderRadius: '16px', padding: '1.5rem', marginBottom: '2rem' }}>
+                <div style={{ background: 'white', borderRadius: '16px', padding: '1.5rem', marginBottom: triageData.red_flags?.length > 0 ? '1rem' : '1.5rem' }}>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Recommended Specialty</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                     <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--primary-fixed)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -332,9 +380,33 @@ export default function Intake() {
                     <div style={{ fontWeight: 700, fontSize: '1rem' }}>{triageData.recommended_specialist}</div>
                   </div>
                 </div>
+
+                {recommendation && (
+                  <div style={{ background: 'white', borderRadius: '16px', padding: '1.5rem', marginBottom: triageData.red_flags?.length > 0 ? '1rem' : '0', border: '1px solid var(--primary-fixed)', position: 'relative', overflow: 'hidden' }}>
+                    <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--primary)', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <MapPin size={14} /> NEAREST FACILITY
+                    </div>
+                    <div style={{ fontWeight: 800, fontSize: '1.125rem', marginBottom: '0.25rem' }}>{recommendation.name}</div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1rem', lineHeight: 1.4 }}>{recommendation.address}</div>
+                    
+                    {recommendation.hasSpecialty && (
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', background: 'rgba(102,187,106,0.1)', color: '#2e7d32', padding: '0.25rem 0.6rem', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600, marginBottom: '1rem' }}>
+                        <CheckCircle2 size={12} /> Matches Needed Specialty
+                      </div>
+                    )}
+
+                    <Link 
+                      to="/appointments" 
+                      className="btn-primary" 
+                      style={{ width: '100%', padding: '0.6rem', fontSize: '0.875rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', background: 'var(--primary)', color: 'white' }}
+                    >
+                      Book at this Facility <ChevronRight size={14} />
+                    </Link>
+                  </div>
+                )}
                 
                 {triageData.red_flags?.length > 0 && (
-                   <div style={{ background: '#ffebee', borderRadius: '16px', padding: '1.5rem', marginBottom: '2rem', border: '1px solid #ffcdd2' }}>
+                   <div style={{ background: '#ffebee', borderRadius: '16px', padding: '1.5rem', marginTop: '1.5rem', border: '1px solid #ffcdd2' }}>
                      <div style={{ fontSize: '0.75rem', color: '#c62828', marginBottom: '0.5rem', fontWeight: 700 }}>RED FLAGS DETECTED</div>
                      <ul style={{ paddingLeft: '1.5rem', color: '#c62828', fontSize: '0.875rem', margin: 0 }}>
                        {triageData.red_flags.map((flag: string, i: number) => <li key={i}>{flag}</li>)}
@@ -345,8 +417,8 @@ export default function Intake() {
 
               {/* Triage Reasoning & Appt Mock */}
               <div style={{ background: 'var(--neutral-100)', borderRadius: '1rem', padding: '2rem', border: '1px solid var(--neutral-400)' }}>
-                <div style={{ fontSize: '0.75rem', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>CHAIN OF THOUGHT</div>
-                <h2 style={{ fontSize: '1.5rem', fontWeight: 800, marginBottom: '1.5rem' }}>Clinical Reasoning</h2>
+                <div style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>CHAIN OF THOUGHT</div>
+                <h2 style={{ fontSize: 'var(--font-h2)', fontWeight: 800, marginBottom: '1.5rem' }}>Clinical Reasoning</h2>
                 
                 <div style={{ background: 'white', borderRadius: '16px', padding: '1.5rem', fontSize: '0.875rem' }}>
                    <ol style={{ paddingLeft: '1.25rem', margin: 0, color: 'var(--text-main)' }}>

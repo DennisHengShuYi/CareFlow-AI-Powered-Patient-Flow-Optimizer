@@ -22,7 +22,7 @@ export default function LiveTriage() {
   if (loading) {
     return (
       <LayoutSidebar>
-        <div style={{ padding: '2rem 3rem', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className="responsive-padding" style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div style={{ fontSize: '1.25rem', color: 'var(--text-muted)' }}>Loading live stream...</div>
         </div>
       </LayoutSidebar>
@@ -33,32 +33,26 @@ export default function LiveTriage() {
 
   return (
     <LayoutSidebar>
-      <div style={{ padding: '2rem 3rem', height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div className="responsive-padding" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
         
         {/* Header Section */}
-        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '2rem' }}>
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '2rem', flexWrap: 'wrap', gap: '1.5rem' }}>
           <div>
-            <h1 style={{ fontSize: '2.5rem', fontWeight: 700, letterSpacing: '-0.02em', marginBottom: '0.25rem' }}>Active Duty</h1>
+            <h1 style={{ fontSize: 'var(--font-h1)', fontWeight: 700, letterSpacing: '-0.02em', marginBottom: '0.25rem' }}>Active Duty</h1>
             <p style={{ fontSize: '0.875rem', textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-muted)' }}>Live Clinical Overview</p>
           </div>
-          <div style={{ display: 'flex', gap: '1rem' }}>
-            <div className="card" style={{ padding: '0.75rem 1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', borderRadius: '9999px' }}>
-              <div style={{ color: '#ba1a1a', background: '#ffdad6', width: '24px', height: '24px', borderRadius: '50%', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>!</div>
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <div className="card" style={{ padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.75rem', borderRadius: '9999px', minWidth: 'fit-content' }}>
+              <div style={{ color: '#ba1a1a', background: '#ffdad6', width: '20px', height: '20px', borderRadius: '50%', display: 'flex', justifyContent: 'center', alignItems: 'center', fontSize: '10px' }}>!</div>
               <div>
-                <div style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Critical</div>
-                <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>0{data.critical}</div>
+                <div style={{ fontSize: '0.6rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Critical</div>
+                <div style={{ fontSize: '1.125rem', fontWeight: 700 }}>0{data.critical}</div>
               </div>
             </div>
-            <div className="card" style={{ padding: '0.75rem 1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', borderRadius: '9999px' }}>
+            <div className="card" style={{ padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.75rem', borderRadius: '9999px', minWidth: 'fit-content' }}>
               <div>
-                <div style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Queue</div>
-                <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{data.queue_active} Active</div>
-              </div>
-            </div>
-            <div className="card" style={{ padding: '0.75rem 1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', borderRadius: '9999px' }}>
-              <div>
-                <div style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Avg Wait</div>
-                <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{data.avg_wait}</div>
+                <div style={{ fontSize: '0.6rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Queue</div>
+                <div style={{ fontSize: '1.125rem', fontWeight: 700 }}>{data.queue_active} Active</div>
               </div>
             </div>
           </div>
@@ -80,7 +74,7 @@ export default function LiveTriage() {
               </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 2fr 1fr', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', paddingBottom: '1rem', borderBottom: '1px solid var(--neutral-400)', marginBottom: '1rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(100px, 1fr) 1fr 2fr 100px', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', paddingBottom: '1rem', borderBottom: '1px solid var(--neutral-400)', marginBottom: '1rem' }} className="hide-on-mobile">
               <div>Time/Urgency</div>
               <div>Patient</div>
               <div>Chief Complaint</div>
@@ -91,21 +85,29 @@ export default function LiveTriage() {
               {data.patients.map((patient: any, idx: number) => {
                 const isCritical = patient.level === 1;
                 return (
-                  <div key={idx} style={{ background: isCritical ? '#fffcfc' : 'var(--neutral-200)', borderRadius: '12px', padding: '1rem', display: 'grid', gridTemplateColumns: '1fr 1fr 2fr 1fr', alignItems: 'center' }}>
-                    <div>
+                  <div key={idx} style={{ 
+                    background: isCritical ? '#fffcfc' : 'var(--neutral-200)', 
+                    borderRadius: '12px', padding: '1rem', 
+                    display: 'flex', 
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                    gap: '1rem',
+                    justifyContent: 'space-between'
+                  }}>
+                    <div style={{ flex: '1 1 120px', display: 'flex', flexDirection: 'column' }}>
                       <div style={{ fontWeight: 700, fontSize: '1rem' }}>{patient.time}</div>
                       <div style={{ color: isCritical ? '#ba1a1a' : (patient.level === 2 ? 'var(--secondary)' : 'var(--primary)'), fontSize: '0.75rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                         {isCritical && <span>!</span>} LEVEL {patient.level}
                       </div>
                     </div>
-                    <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-                      <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--neutral-400)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 600 }}>{patient.initials}</div>
+                    <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flex: '1 1 180px' }}>
+                      <div style={{ width: '32px', height: '32px', minWidth: '32px', borderRadius: '50%', background: 'var(--neutral-400)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 600 }}>{patient.initials}</div>
                       <div>
                         <div style={{ fontWeight: 600 }}>{patient.name}</div>
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{patient.details}</div>
                       </div>
                     </div>
-                    <div style={{ fontWeight: 500 }}>{patient.complaint}</div>
+                    <div style={{ fontWeight: 500, flex: '2 1 200px' }}>{patient.complaint}</div>
                     <div style={{ textAlign: 'right' }}>
                       <span style={{ 
                         background: patient.status_color === 'danger' ? '#ffdad6' : 'var(--neutral-400)', 
