@@ -1,73 +1,60 @@
-# React + TypeScript + Vite
+# MediRoute AI Healthcare Platform
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+CareFlow-AI-Powered-Patient-Flow-Optimizer is a full-stack platform built to digitize and automate critical clinical pathways, bridging real-time hospital queues with smart multi-modal patient intake and automated insurance workflows.
 
-Currently, two official plugins are available:
+## Architecture Structure
+- **Frontend** (React + TypeScript + Vite)
+- **Backend** (Python + FastAPI)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+---
 
-## React Compiler
+## 🚀 How to Run the Website Locally
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+This application requires both the frontend dev server and the backend API service to run concurrently. We recommend opening two separate terminal instances.
 
-## Expanding the ESLint configuration
+### 1. Starting the Python Backend
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+The backend utilizes FastAPI to serve clinical data and orchestrate AI features.
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+```bash
+# Navigate to the backend directory
+cd backend
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+# Activate the virtual environment (Windows Powershell)
+.\venv\Scripts\Activate.ps1
+# (or if you are on Mac/Linux: source venv/bin/activate)
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+# Install dependencies (if you haven't yet)
+pip install fastapi uvicorn
+
+# Start the local ASGI server
+uvicorn main:app --reload
 ```
+*The backend API will run on `http://127.0.0.1:8000`*
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+### 2. Starting the React Frontend
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+The frontend is a Vite-powered single-page application integrating a custom cohesive design system (Luminescent Sanctuary).
+
+```bash
+# Navigate to the frontend directory
+cd frontend
+
+# Install necessary Node.js dependencies
+npm install
+
+# Start the Vite development server
+npm run dev
 ```
+*The website will now be accessible in your browser at `http://localhost:5173`*
+
+---
+
+## 🧭 Platform Modules overview
+
+1. **Dashboard (`/`)**: Live triage queue monitoring, capacity stats, and dynamic SOAP Note generation capabilities.
+2. **Patient Data Pipeline (`/intake`)**: End-to-end multi-modal symptom collection (accepting text/voice/pdfs) featuring real-time AI cross-referencing and urgency scores.
+3. **Insurance Claims Orchestrator (`/claims`)**: Pipeline built to ingest Medical Diagnosis, Bills, and Policy docs to output auto-generated GL requests directly to regional insurers (AIA/Prudential).
+4. **Appointments Simulator (`/appointments`)**: Dynamic slot mapping algorithm bridging Telehealth + GP. 
+5. **Departments Overview (`/departments`)**: Abstract scaling architecture for hospital cross-functional expansions.
