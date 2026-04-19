@@ -12,6 +12,9 @@
   --neutral-500: #dce3eb;
   --text-main: #151c22;
   --text-muted: #404752;
+  --success: #2E7D32;
+  --warning: #F9A825;
+  --danger: #C62828;
   
   --bg-gradient: linear-gradient(135deg, var(--neutral-200) 0%, #e0edfb 100%);
   --shadow-sm: 0 4px 10px rgba(227, 242, 253, 0.4);

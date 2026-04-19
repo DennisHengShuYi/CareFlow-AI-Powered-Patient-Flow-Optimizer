@@ -1,67 +1,48 @@
+import logging
+import time
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from app.api.endpoints import router
 
-app = FastAPI()
+# Configure logging to a file
+logging.basicConfig(
+    filename='backend_errors.log',
+    level=logging.ERROR,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-# Add CORS middleware to allow the frontend to access the API
+# Diagnostic Print
+import app
+print(f"DEBUG: Loading 'app' module from: {app.__file__}")
+
+app = FastAPI(
+    title="MediRoute AI Patient Intake API",
+    description="Bilingual (BM+EN) AI-powered triage & appointment booking",
+    version="1.0.0",
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Update this in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-@app.get('/api/triage/overview')
-def get_triage_overview():
-    return {
-        "critical": 3,
-        "queue_active": 14,
-        "avg_wait": "12m",
-        "patients": [
-            {
-                "time": "10:42",
-                "level": 1,
-                "initials": "JR",
-                "name": "J. Reyes",
-                "details": "58M • MRN: 9284",
-                "complaint": "Chest pain, radiatin...",
-                "status": "In Resus",
-                "status_color": "danger"
-            },
-            {
-                "time": "11:05",
-                "level": 2,
-                "initials": "SL",
-                "name": "S. Lin",
-                "details": "32F • MRN: 1102",
-                "complaint": "Acute abdominal p...",
-                "status": "Awaiting Labs",
-                "status_color": "neutral"
-            },
-            {
-                "time": "11:20",
-                "level": 3,
-                "initials": "MK",
-                "name": "M. Kaur",
-                "details": "45F • MRN: 8821",
-                "complaint": "Laceration to left fo...",
-                "status": "Room 4",
-                "status_color": "neutral"
-            }
-        ],
-        "active_encounter": {
-            "initials": "JR",
-            "name": "Javier Reyes",
-            "details": "58 yrs • Male • DOB: 04/12/1966"
-        },
-        "ai_scribe": {
-            "status": "Processing live audio... Note generation in progress based on initial triage vitals and complaint.",
-            "subjective": "Patient presents with sudden onset chest pain starting 45 mins ago. Describes as \"crushing\" pressure, 8/10, radiating to L arm. Accompanied by diaphoresis and mild nausea. No prior history of CAD.",
-            "vitals": {
-                "bp": "165/95",
-                "hr": "110",
-                "o2": "96% RA"
-            }
-        }
-    }
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request_request, exc):
+    exc_str = f'{exc}'.replace('\n', ' ').replace('   ', ' ')
+    error_msg = f"DEBUG: [422] Validation Error: {exc_str} | Body: {exc.body}"
+    print(error_msg)
+    with open('backend_errors.log', 'a') as f:
+        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - 422_ERROR - {error_msg}\n")
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors(), "body": exc.body}
+    )
+
+app.include_router(router)

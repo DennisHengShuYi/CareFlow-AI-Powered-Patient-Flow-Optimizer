@@ -1,60 +1,78 @@
 # MediRoute AI Healthcare Platform
 
-CareFlow-AI-Powered-Patient-Flow-Optimizer is a full-stack platform built to digitize and automate critical clinical pathways, bridging real-time hospital queues with smart multi-modal patient intake and automated insurance workflows.
+MediRoute is a full-stack AI-powered healthcare platform designed to optimize patient flow through multi-modal triage (text, voice, documents) and automated insurance orchestration.
 
-## Architecture Structure
-- **Frontend** (React + TypeScript + Vite)
-- **Backend** (Python + FastAPI)
+## Architecture
+- **Frontend**: React + TypeScript + Vite (Port 5173)
+- **Backend**: Python + FastAPI (Port 8002)
+- **Memory/Cache**: Upstash Redis (Serverless)
+- **AI Engine**: Google Gemini (gemini-2.5-flash-lite)
 
 ---
 
-## 🚀 How to Run the Website Locally
+## 🚀 Getting Started
 
-This application requires both the frontend dev server and the backend API service to run concurrently. We recommend opening two separate terminal instances.
+### 1. Prerequisites
+- **Node.js** (v18+)
+- **Python** (3.9+)
+- **API Keys**: You will need a `.env` file in the root directory with:
+  - `GEMINI_API_KEY`: For AI Triage
+  - `UPSTASH_REDIS_REST_URL` & `UPSTASH_REDIS_REST_TOKEN`: For session memory
+  - `CLERK_SECRET_KEY` & `VITE_CLERK_PUBLISHABLE_KEY`: For Authentication
 
-### 1. Starting the Python Backend
-
-The backend utilizes FastAPI to serve clinical data and orchestrate AI features.
+### 2. Run the Backend
+The backend serves the AI logic and handles session persistence.
 
 ```bash
-# Navigate to the backend directory
 cd backend
 
-# Activate the virtual environment (Windows Powershell)
-.\venv\Scripts\Activate.ps1
-# (or if you are on Mac/Linux: source venv/bin/activate)
+# Create & Activate Virtual Environment
+python -m venv venv
+.\venv\Scripts\Activate.ps1  # Windows
+# source venv/bin/activate   # Mac/Linux
 
-# Install dependencies (if you haven't yet)
-pip install fastapi uvicorn
+# Install Dependencies
+pip install -r requirements.txt
 
-# Start the local ASGI server
-uvicorn main:app --reload
+# Start Backend Server on Port 8002
+# IMPORTANT: Use port 8002 to avoid conflicts with ghost processes on 8001
+uvicorn main:app --port 8002 --reload
 ```
-*The backend API will run on `http://127.0.0.1:8000`*
+*Backend will be live at: `http://localhost:8002`*
 
-
-### 2. Starting the React Frontend
-
-The frontend is a Vite-powered single-page application integrating a custom cohesive design system (Luminescent Sanctuary).
+### 3. Run the Frontend
+The frontend provides the Luminescent Sanctuary UI experience.
 
 ```bash
-# Navigate to the frontend directory
 cd frontend
 
-# Install necessary Node.js dependencies
+# Install Dependencies
 npm install
 
-# Start the Vite development server
+# Start Development Server
 npm run dev
 ```
-*The website will now be accessible in your browser at `http://localhost:5173`*
+*Frontend will be live at: `http://localhost:5173`*
 
 ---
 
-## 🧭 Platform Modules overview
+## 🛠️ Troubleshooting
 
-1. **Dashboard (`/`)**: Live triage queue monitoring, capacity stats, and dynamic SOAP Note generation capabilities.
-2. **Patient Data Pipeline (`/intake`)**: End-to-end multi-modal symptom collection (accepting text/voice/pdfs) featuring real-time AI cross-referencing and urgency scores.
-3. **Insurance Claims Orchestrator (`/claims`)**: Pipeline built to ingest Medical Diagnosis, Bills, and Policy docs to output auto-generated GL requests directly to regional insurers (AIA/Prudential).
-4. **Appointments Simulator (`/appointments`)**: Dynamic slot mapping algorithm bridging Telehealth + GP. 
-5. **Departments Overview (`/departments`)**: Abstract scaling architecture for hospital cross-functional expansions.
+### Stuck Port Error
+If you see an error saying the address is already in use (common with port 8001/8002 on Windows), run:
+```powershell
+# Kill all ghost uvicorn/python processes
+taskkill /F /IM uvicorn.exe /T
+taskkill /F /IM python.exe /T
+```
+
+### Authentication
+Ensure you are logged into Clerk in the browser to access the Intake features. For development, a "demo" mode is active if the Clerk key is not fully configured.
+
+---
+
+## 🧭 Platform Modules
+- **Dashboard**: Live queue monitoring.
+- **Patient Data**: Text/Voice/PDF symptom intake.
+- **Claims**: Automated Insurance GL generation.
+- **Appointments**: AI-assisted scheduling.

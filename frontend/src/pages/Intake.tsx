@@ -1,8 +1,198 @@
+import React, { useState, useRef } from 'react';
 import LayoutSidebar from '../components/LayoutSidebar';
 import { Link } from 'react-router-dom';
-import { ShieldAlert, HeartPulse, MapPin, CheckCircle2, ChevronRight, ChevronLeft, ArrowLeft, ArrowRight, Mic, Upload, Type } from 'lucide-react';
+import { ShieldAlert, HeartPulse, MapPin, CheckCircle2, ChevronRight, ChevronLeft, ArrowLeft, ArrowRight, Mic, Upload, Type, Loader2, X, FileText } from 'lucide-react';
+import { useAuth } from '@clerk/clerk-react';
 
 export default function Intake() {
+  const { getToken } = useAuth();
+  const [step, setStep] = useState<1 | 2>(1);
+  const [inputMode, setInputMode] = useState<"none" | "text" | "voice">("text");
+  const [textInput, setTextInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [triageData, setTriageData] = useState<any>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [followUpResponse, setFollowUpResponse] = useState('');
+  const [isFollowingUp, setIsFollowingUp] = useState(false);
+  const [nextAction, setNextAction] = useState<string | null>(null);
+  const [question, setQuestion] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [followUpInputMode, setFollowUpMode] = useState<"text" | "voice">("text");
+  
+  // Real-time Voice Transcription
+  const [isListening, setIsListening] = useState(false);
+  const [voiceTranscript, setVoiceTranscript] = useState('');
+  const recognitionRef = useRef<any>(null);
+  
+  // Document Attachment State
+  const [attachedDocContent, setAttachedDocContent] = useState<string | null>(null);
+  const [attachedDocName, setAttachedDocName] = useState<string | null>(null);
+
+  const resetIntake = () => {
+    setStep(1);
+    setSessionId(null);
+    setTriageData(null);
+    setTextInput('');
+    setNextAction(null);
+    setQuestion(null);
+    setFollowUpResponse('');
+    setIsFollowingUp(false);
+    setInputMode('text');
+  };
+
+  const processTriageText = async (text: string) => {
+    setLoading(true);
+    try {
+      const token = await getToken();
+      const res = await fetch('http://localhost:8002/intake/text', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ 
+          text,
+          session_id: sessionId // Pass existing session if any
+        })
+      });
+      if (!res.ok) throw new Error('Failed to process text');
+      const data = await res.json();
+      
+      setTriageData(data.triage);
+      setSessionId(data.session_id);
+      setNextAction(data.next_action);
+      setQuestion(data.question);
+      
+      setStep(2);
+      setIsFollowingUp(false);
+      setFollowUpResponse('');
+    } catch (err) {
+      console.error(err);
+      alert('Triage processing failed. Please check the backend connection.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleTextSubmit = () => {
+    if (!textInput.trim() && !attachedDocContent) return;
+    
+    // Combine inputs
+    let combined = textInput;
+    if (attachedDocContent) {
+      combined += `\n\n[ATTACHED DOCUMENT: ${attachedDocName}]\n${attachedDocContent}`;
+    }
+    
+    processTriageText(combined);
+    // Clear attachments on success (handled in resetIntake if we go back, but for now we'll keep until we change step)
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.length) return;
+    const fileName = e.target.files[0].name;
+    setLoading(true);
+    try {
+      const token = await getToken();
+      const formData = new FormData();
+      formData.append('file', e.target.files[0]);
+      
+      const docRes = await fetch('http://localhost:8002/intake/document', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` },
+          body: formData
+      });
+      if (!docRes.ok) throw new Error('File upload failed');
+      const docData = await docRes.json();
+      
+      setAttachedDocContent(docData.content || docData.extracted || "");
+      setAttachedDocName(fileName);
+      setInputMode('text'); // Switch to text mode so they can see the input area
+      
+    } catch (err) {
+      console.error(err);
+      alert('Failed to upload or process document.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const startListening = () => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert("Your browser does not support real-time voice recognition. Please try Chrome or Edge.");
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US'; // Default, we can make this dynamic if needed
+
+    recognition.onresult = (event: any) => {
+      let interim = '';
+      let final = '';
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        if (event.results[i].isFinal) {
+          final += event.results[i][0].transcript + ' ';
+        } else {
+          interim += event.results[i][0].transcript;
+        }
+      }
+      
+      setVoiceTranscript(prev => {
+        const newTranscript = prev + final;
+        // Auto-sync to the corresponding text state
+        if (step === 1) {
+          setTextInput(newTranscript);
+        } else {
+          setFollowUpResponse(newTranscript);
+        }
+        return newTranscript;
+      });
+    };
+
+    recognition.onerror = (event: any) => {
+      console.error("Speech recognition error", event.error);
+      setIsListening(false);
+    };
+
+    recognition.onend = () => {
+      // If we wanted it to be truly continuous across pauses, we'd restart here if isListening is true
+      if (isListening) recognition.start();
+    };
+
+    recognitionRef.current = recognition;
+    recognition.start();
+    setIsListening(true);
+    setInputMode('voice');
+  };
+
+  const stopListening = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
+    setIsListening(false);
+  };
+
+  const cancelVoice = () => {
+    stopListening();
+    setVoiceTranscript('');
+    setInputMode('text');
+  };
+
+  const submitVoice = () => {
+    if (!voiceTranscript.trim() && !attachedDocContent) return;
+    stopListening();
+    
+    let combined = voiceTranscript;
+    if (attachedDocContent) {
+      combined += `\n\n[ATTACHED DOCUMENT: ${attachedDocName}]\n${attachedDocContent}`;
+    }
+    
+    processTriageText(combined);
+    setVoiceTranscript('');
+  };
+
   return (
     <LayoutSidebar>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2rem 1rem', minHeight: '100%' }}>
@@ -15,192 +205,278 @@ export default function Intake() {
           </div>
         </div>
 
-        {/* Multi-modal Patient Intake Panel */}
-        <div className="card" style={{ width: '100%', maxWidth: '1000px', display: 'flex', flexDirection: 'column', padding: '2rem', marginBottom: '2rem', background: '#ffffff', border: '1px solid var(--neutral-400)' }}>
-          <h2 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '1rem' }}>Multi-Modal Patient Intake</h2>
-          <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-            <button className="btn-primary flex items-center justify-center gap-2" style={{ flex: 1, padding: '1rem', background: 'var(--neutral-200)', color: 'var(--secondary)', border: '1px dashed var(--secondary)' }}><Mic size={20} /> Voice Recording / Dictation</button>
-            <button className="btn-primary flex items-center justify-center gap-2" style={{ flex: 1, padding: '1rem', background: 'var(--neutral-200)', color: 'var(--secondary)', border: '1px dashed var(--secondary)' }}><Upload size={20} /> Clinical Doc Upload</button>
-            <button className="btn-primary flex items-center justify-center gap-2" style={{ flex: 1, padding: '1rem', background: 'var(--neutral-200)', color: 'var(--secondary)', border: '1px dashed var(--secondary)' }}><Type size={20} /> Manual Text Entry</button>
-          </div>
-        </div>
-        
-        {/* Progress Bar */}
-        <div style={{ display: 'flex', alignItems: 'center', width: '100%', maxWidth: '800px', marginBottom: '4rem', padding: '0 2rem' }}>
-          <div style={{ flex: 1, position: 'relative' }}>
-            <div style={{ position: 'absolute', top: '12px', left: '0', right: '-100%', height: '2px', background: 'var(--secondary)', zIndex: 0 }}></div>
-            <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-              <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--secondary)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '0.5rem' }}><CheckCircle2 size={16} /></div>
-              <div style={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '1px', color: 'var(--secondary)', textTransform: 'uppercase' }}>Patient Info</div>
-            </div>
-          </div>
-          <div style={{ flex: 1, position: 'relative' }}>
-            <div style={{ position: 'absolute', top: '12px', left: '0', right: '-100%', height: '2px', background: 'var(--secondary)', zIndex: 0 }}></div>
-            <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--secondary)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '0.5rem' }}><CheckCircle2 size={16} /></div>
-              <div style={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '1px', color: 'var(--secondary)', textTransform: 'uppercase' }}>Symptoms</div>
-            </div>
-          </div>
-          <div style={{ flex: 1, position: 'relative' }}>
-            <div style={{ position: 'absolute', top: '12px', left: '0', right: '0', height: '2px', background: 'var(--neutral-400)', zIndex: 0 }}></div>
-            <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              <div style={{ padding: '0.5rem 1rem', borderRadius: '9999px', background: 'var(--secondary)', color: 'white', fontSize: '0.875rem', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '0.5rem', transform: 'translateY(-6px)' }}>Triage & Schedule</div>
-            </div>
-          </div>
-          <div style={{ position: 'relative' }}>
-            <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-              <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--neutral-300)', color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '0.5rem' }}>4</div>
-              <div style={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '1px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Confirm</div>
-            </div>
-          </div>
-        </div>
+        {step === 1 && (
+          <div className="card" style={{ width: '100%', maxWidth: '800px', padding: '3rem', display: 'flex', flexDirection: 'column' }}>
+            <h1 style={{ fontSize: '2rem', fontWeight: 800, marginBottom: '1rem' }}>How can we help today?</h1>
+            <p style={{ color: 'var(--text-muted)', marginBottom: '2rem' }}>
+              Describe your symptoms naturally in English or Bahasa Malaysia. You can type, speak, or upload a medical document.
+            </p>
 
-        {/* Content */}
-        <div className="card" style={{ width: '100%', maxWidth: '1000px', display: 'flex', flexDirection: 'column', padding: '3rem' }}>
-          
-          <h1 style={{ fontSize: '2.5rem', fontWeight: 800, marginBottom: '1rem' }}>LLM Triage Complete</h1>
-          <p style={{ fontSize: '1.125rem', color: 'var(--text-muted)', marginBottom: '3rem', maxWidth: '650px', lineHeight: 1.6 }}>
-            Based on multi-modal symptom intake, the LLM Triage Engine has handled conversational ambiguities, assigned a dynamic urgency score, and determined the optimal care pathway.
-          </p>
+            <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '2rem' }}>
+              <button onClick={() => setInputMode('text')} className="btn-primary" style={{ flex: 1, padding: '1rem', background: inputMode === 'text' ? 'var(--secondary)' : 'var(--neutral-200)', color: inputMode === 'text' ? 'white' : 'var(--secondary)' }}>
+                <Type size={20} className="inline mr-2" /> Text Entry
+              </button>
+               <button 
+                onClick={isListening ? stopListening : startListening}
+                className="btn-primary" style={{ flex: 1, padding: '1rem', background: isListening ? '#ffebee' : 'var(--neutral-200)', color: isListening ? '#c62828' : 'var(--secondary)', border: isListening ? '1px solid #c62828' : 'none' }}>
+                <Mic size={20} className={`inline mr-2 ${isListening ? 'animate-pulse' : ''}`} /> 
+                {isListening ? 'Stop Listening' : 'Voice Intake'}
+              </button>
+              <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={handleFileUpload} accept="image/*,.pdf" />
+              <button 
+                onClick={() => fileInputRef.current?.click()} 
+                disabled={loading}
+                className="btn-primary" style={{ flex: 1, padding: '1rem', background: attachedDocName ? 'var(--primary-fixed)' : 'var(--neutral-200)', color: 'var(--secondary)', border: attachedDocName ? '1px solid var(--primary)' : 'none' }}>
+                <Upload size={20} className="inline mr-2" /> {attachedDocName ? 'Document Attached' : 'Upload Doc'}
+              </button>
+            </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '2rem', marginBottom: '2rem', width: '100%' }}>
-            
-            {/* Triage Summary */}
-            <div style={{ background: 'var(--neutral-200)', borderRadius: '1rem', padding: '2rem', display: 'flex', flexDirection: 'column' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem' }}>
-                <div>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>ASSESSMENT</div>
-                  <h2 style={{ fontSize: '1.5rem', fontWeight: 800 }}>AI Triage<br/>Summary</h2>
-                </div>
-                <div style={{ background: 'linear-gradient(90deg, #A2C9FF, #759EFD)', color: 'var(--secondary)', display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1rem', borderRadius: '9999px', fontSize: '0.875rem', fontWeight: 700 }}>
-                  <ShieldAlert size={16} /> Moderate Urgency
-                </div>
-              </div>
-
-              <div style={{ background: 'white', borderRadius: '16px', padding: '1.5rem', marginBottom: '1rem' }}>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Primary Indicators</div>
-                <div style={{ fontWeight: 500, fontSize: '0.875rem', lineHeight: 1.5 }}>Persistent localized pain, elevated temperature reported over 48 hours.</div>
-              </div>
-
-              <div style={{ background: 'white', borderRadius: '16px', padding: '1.5rem', marginBottom: '2rem' }}>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Recommended Specialty</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                  <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--primary-fixed)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <HeartPulse size={16} color="var(--primary)" />
+            {attachedDocName && (
+               <div style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem 1rem', background: 'var(--neutral-100)', borderRadius: '12px', border: '1px solid var(--neutral-400)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <FileText size={18} color="var(--primary)" />
+                    <span style={{ fontSize: '0.875rem', fontWeight: 600 }}>{attachedDocName}</span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>(Content captured)</span>
                   </div>
-                  <div style={{ fontWeight: 700, fontSize: '1rem' }}>General Internal Medicine</div>
-                </div>
-              </div>
+                  <button 
+                    onClick={() => { setAttachedDocContent(null); setAttachedDocName(null); }}
+                    style={{ color: 'var(--danger)', padding: '0.25rem' }}>
+                    <X size={18} />
+                  </button>
+               </div>
+            )}
 
-              <div style={{ marginTop: 'auto', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                <CheckCircle2 size={16} color="var(--primary)" /> Analysis verified by Clinical Rules Engine v2.4
+            {inputMode === 'text' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <textarea 
+                  value={textInput}
+                  onChange={(e) => setTextInput(e.target.value)}
+                  placeholder="e.g. I have a crushing chest pain that radiates to my jaw..."
+                  rows={4}
+                  style={{ width: '100%', padding: '1rem', borderRadius: '8px', border: '1px solid var(--neutral-400)', background: 'var(--neutral-100)', resize: 'none' }}
+                />
+                <button 
+                  onClick={handleTextSubmit}
+                  disabled={loading || !textInput.trim()}
+                  className="btn-primary" style={{ alignSelf: 'flex-end', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  {loading ? <Loader2 size={16} className="animate-spin" /> : <ArrowRight size={16} />}
+                  {loading ? 'Processing...' : 'Analyze Symptoms'}
+                </button>
               </div>
-            </div>
+            )}
+            
+            {inputMode === 'voice' && (
+               <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', background: 'var(--neutral-200)', padding: '2rem', borderRadius: '1rem', border: '1px solid var(--neutral-400)' }}>
+                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', color: isListening ? 'var(--danger)' : 'var(--text-muted)' }}>
+                      <Mic size={20} className={isListening ? 'animate-pulse' : ''} />
+                      <span style={{ fontWeight: 600 }}>{isListening ? 'Listening...' : 'Microphone Paused'}</span>
+                   </div>
+                   <button onClick={cancelVoice} style={{ color: 'var(--danger)', fontSize: '0.875rem' }}>Cancel</button>
+                 </div>
 
-            {/* Optimal Location */}
-            <div style={{ background: 'var(--neutral-100)', borderRadius: '1rem', padding: '2rem', border: '1px solid var(--neutral-400)' }}>
-              <div style={{ fontSize: '0.75rem', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>OPTIMAL LOCATION</div>
-              <h2 style={{ fontSize: '1.5rem', fontWeight: 800, marginBottom: '1.5rem' }}>MediRoute Central Hospital</h2>
+                 <div style={{ minHeight: '100px', padding: '1.25rem', background: 'white', borderRadius: '12px', border: '1px solid var(--neutral-400)', fontSize: '1.125rem', lineHeight: 1.5 }}>
+                   {voiceTranscript || <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>Start speaking to see transcription...</span>}
+                 </div>
+
+                 <div style={{ display: 'flex', gap: '1rem' }}>
+                    <button 
+                      onClick={isListening ? stopListening : startListening}
+                      className="btn-secondary" style={{ flex: 1 }}>
+                      {isListening ? 'Pause' : 'Resume'}
+                    </button>
+                    <button 
+                      onClick={submitVoice}
+                      disabled={!voiceTranscript.trim() || loading}
+                      className="btn-primary" style={{ flex: 2, background: 'var(--success)', color: 'white' }}>
+                      {loading ? <Loader2 className="animate-spin mr-2 inline" /> : <ChevronRight className="mr-2 inline" />}
+                      Analyze Speech
+                    </button>
+                 </div>
+               </div>
+             )}
+          </div>
+        )}
+
+        {step === 2 && triageData && (
+          <div className="card" style={{ width: '100%', maxWidth: '1000px', display: 'flex', flexDirection: 'column', padding: '3rem' }}>
+            <h1 style={{ fontSize: '2.5rem', fontWeight: 800, marginBottom: '1rem' }}>LLM Triage Complete</h1>
+            <p style={{ fontSize: '1.125rem', color: 'var(--text-muted)', marginBottom: '3rem', maxWidth: '650px', lineHeight: 1.6 }}>
+              Based on your multi-modal symptom intake, the Triage Engine has assigned an urgency score and requested optimal care.
+            </p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '2rem', marginBottom: '2rem', width: '100%' }}>
               
-              {/* Map Placeholder */}
-              <div style={{ width: '100%', height: '200px', background: 'var(--tertiary)', borderRadius: '16px', marginBottom: '1.5rem', position: 'relative', overflow: 'hidden' }}>
-                {/* Simulated Map Visual */}
-                <div style={{ position: 'absolute', inset: 0, opacity: 0.2, backgroundImage: 'radial-gradient(circle at center, white 2px, transparent 2px)', backgroundSize: '20px 20px' }}></div>
-                <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: '120px', height: '120px', background: '#d32f2f', borderRadius: '50% 50% 50% 0', transformOrigin: 'center center', rotate: '-45deg' }}></div>
-                <div style={{ position: 'absolute', top: '48%', left: '50%', transform: 'translate(-50%, -50%)', width: '40px', height: '40px', background: 'white', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <HeartPulse size={20} color="#d32f2f" />
+              <div style={{ background: 'var(--neutral-200)', borderRadius: '1rem', padding: '2rem', display: 'flex', flexDirection: 'column' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem' }}>
+                  <div>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>ASSESSMENT</div>
+                    <h2 style={{ fontSize: '1.5rem', fontWeight: 800 }}>AI Triage<br/>Summary</h2>
+                  </div>
+                  <div style={{ background: triageData.urgency_score === 'P1' ? '#ffcdd2' : 'linear-gradient(90deg, #A2C9FF, #759EFD)', color: triageData.urgency_score === 'P1' ? '#c62828' : 'var(--secondary)', display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1rem', borderRadius: '9999px', fontSize: '0.875rem', fontWeight: 700 }}>
+                    <ShieldAlert size={16} /> Urgency: {triageData.urgency_score}
+                  </div>
+                </div>
+
+                <div style={{ background: 'white', borderRadius: '16px', padding: '1.5rem', marginBottom: '1rem' }}>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Chief Complaint</div>
+                  <div style={{ fontWeight: 500, fontSize: '0.875rem', lineHeight: 1.5 }}>{triageData.chief_complaint}</div>
+                </div>
+
+                <div style={{ background: 'white', borderRadius: '16px', padding: '1.5rem', marginBottom: '2rem' }}>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Recommended Specialty</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--primary-fixed)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <HeartPulse size={16} color="var(--primary)" />
+                    </div>
+                    <div style={{ fontWeight: 700, fontSize: '1rem' }}>{triageData.recommended_specialist}</div>
+                  </div>
                 </div>
                 
-                <div style={{ position: 'absolute', bottom: '1rem', right: '1rem', background: 'white', padding: '0.5rem 1rem', borderRadius: '9999px', fontSize: '0.875rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
-                  <MapPin size={16} /> 15 mins away
-                </div>
+                {triageData.red_flags?.length > 0 && (
+                   <div style={{ background: '#ffebee', borderRadius: '16px', padding: '1.5rem', marginBottom: '2rem', border: '1px solid #ffcdd2' }}>
+                     <div style={{ fontSize: '0.75rem', color: '#c62828', marginBottom: '0.5rem', fontWeight: 700 }}>RED FLAGS DETECTED</div>
+                     <ul style={{ paddingLeft: '1.5rem', color: '#c62828', fontSize: '0.875rem', margin: 0 }}>
+                       {triageData.red_flags.map((flag: string, i: number) => <li key={i}>{flag}</li>)}
+                     </ul>
+                   </div>
+                )}
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', fontSize: '0.875rem' }}>
-                <div>
-                  <div style={{ color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Address</div>
-                  <div style={{ fontWeight: 500 }}>124 Healthcare Avenue,<br/>Medical District, KL 50400</div>
+              {/* Triage Reasoning & Appt Mock */}
+              <div style={{ background: 'var(--neutral-100)', borderRadius: '1rem', padding: '2rem', border: '1px solid var(--neutral-400)' }}>
+                <div style={{ fontSize: '0.75rem', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>CHAIN OF THOUGHT</div>
+                <h2 style={{ fontSize: '1.5rem', fontWeight: 800, marginBottom: '1.5rem' }}>Clinical Reasoning</h2>
+                
+                <div style={{ background: 'white', borderRadius: '16px', padding: '1.5rem', fontSize: '0.875rem' }}>
+                   <ol style={{ paddingLeft: '1.25rem', margin: 0, color: 'var(--text-main)' }}>
+                     {triageData.reasoning_chain?.map((step: string, i: number) => (
+                       <li key={i} style={{ marginBottom: '0.5rem' }}>{step}</li>
+                     ))}
+                   </ol>
                 </div>
-                <div>
-                  <div style={{ color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Facility Status</div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 500 }}>
-                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#00ACC1' }}></div> Accepting Walk-ins
-                  </div>
-                </div>
+                
+                <div style={{ marginTop: '2rem' }}>
+                    {nextAction === 'question' && question ? (
+                       <div style={{ background: 'var(--primary-fixed)', padding: '1.5rem', borderRadius: '16px', border: '1px solid var(--primary)' }}>
+                         <div style={{ fontWeight: 700, color: 'var(--secondary)', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                           <CheckCircle2 size={18} /> Further Details Requested:
+                         </div>
+                         <div style={{ fontSize: '1rem', color: 'var(--secondary)', marginBottom: '1.5rem', fontStyle: 'italic', lineHeight: 1.5 }}>
+                           "{question}"
+                         </div>
+                         
+                          {!isFollowingUp ? (
+                            <button 
+                              onClick={() => setIsFollowingUp(true)}
+                              className="btn-primary" style={{ width: '100%', background: 'var(--secondary)', color: 'white' }}>
+                              Respond to AI Question
+                            </button>
+                          ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                              <div style={{ display: 'flex', background: 'var(--neutral-300)', borderRadius: '8px', padding: '0.25rem', width: 'fit-content', border: '1px solid var(--neutral-400)' }}>
+                                <button 
+                                  onClick={() => { stopListening(); setFollowUpMode('text'); }}
+                                  style={{ padding: '0.4rem 1rem', borderRadius: '6px', background: followUpInputMode === 'text' ? 'white' : 'transparent', boxShadow: followUpInputMode === 'text' ? '0 2px 4px rgba(0,0,0,0.1)' : 'none', fontWeight: followUpInputMode === 'text' ? 600 : 400, fontSize: '0.75rem' }}>
+                                  Text Response
+                                </button>
+                                <button 
+                                  onClick={() => { setFollowUpMode('voice'); setVoiceTranscript(followUpResponse); }}
+                                  style={{ padding: '0.4rem 1rem', borderRadius: '6px', background: followUpInputMode === 'voice' ? 'white' : 'transparent', boxShadow: followUpInputMode === 'voice' ? '0 2px 4px rgba(0,0,0,0.1)' : 'none', fontWeight: followUpInputMode === 'voice' ? 600 : 400, fontSize: '0.75rem' }}>
+                                  Voice Mode
+                                </button>
+                              </div>
+
+                              {followUpInputMode === 'text' ? (
+                                <textarea 
+                                  value={followUpResponse}
+                                  onChange={(e) => setFollowUpResponse(e.target.value)}
+                                  placeholder="Type your response here..."
+                                  rows={3}
+                                  style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--neutral-400)', fontSize: '0.875rem' }}
+                                />
+                              ) : (
+                                <div style={{ background: 'white', padding: '1.25rem', borderRadius: '12px', border: '1px solid var(--neutral-400)', fontSize: '0.875rem', minHeight: '80px' }}>
+                                   {voiceTranscript || <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>Start speaking...</span>}
+                                   {isListening && <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--danger)', fontSize: '0.7rem', fontWeight: 700 }}>
+                                      <Mic size={12} className="animate-pulse" /> LISTENING...
+                                   </div>}
+                                </div>
+                              )}
+
+                              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                <button 
+                                  onClick={() => { stopListening(); setIsFollowingUp(false); setFollowUpMode('text'); }}
+                                  className="btn-secondary" style={{ flex: 1, fontSize: '0.875rem' }}>
+                                  Cancel
+                                </button>
+                                
+                                {followUpInputMode === 'voice' && !isListening && (
+                                   <button 
+                                     onClick={startListening}
+                                     className="btn-secondary" style={{ flex: 1.5, fontSize: '0.875rem', background: 'var(--primary-fixed)', color: 'var(--primary)' }}>
+                                      Resume Voice
+                                   </button>
+                                )}
+
+                                {followUpInputMode === 'voice' && isListening && (
+                                   <button 
+                                     onClick={stopListening}
+                                     className="btn-secondary" style={{ flex: 1.5, fontSize: '0.875rem', background: '#ffebee', color: '#c62828' }}>
+                                      Pause Voice
+                                   </button>
+                                )}
+
+                                <button 
+                                  onClick={() => { stopListening(); processTriageText(followUpResponse); }}
+                                  disabled={loading || !followUpResponse.trim()}
+                                  className="btn-primary" style={{ flex: 2, fontSize: '0.875rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
+                                  {loading ? <Loader2 size={14} className="animate-spin" /> : <ChevronRight size={14} />}
+                                  Submit Response
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                       </div>
+                    ) : (
+                       <div style={{ background: 'var(--neutral-100)', padding: '2rem', borderRadius: '1.5rem', border: '2px dashed var(--success)', textAlign: 'center' }}>
+                          <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: '#E8F5E9', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem' }}>
+                            <CheckCircle2 size={24} color="var(--success)" />
+                          </div>
+                          <h3 style={{ fontSize: '1.25rem', fontWeight: 800, marginBottom: '0.5rem' }}>Triage Assessment Finalized</h3>
+                          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1.5rem', lineHeight: 1.5 }}>
+                            The AI engine has gathered all necessary clinical details. You can now proceed to select an available appointment slot.
+                          </p>
+                          <button 
+                            className="btn-primary" 
+                            style={{ 
+                              width: '100%', 
+                              padding: '1rem', 
+                              fontSize: '1.125rem', 
+                              background: 'var(--success)', 
+                              color: 'white',
+                              fontWeight: 700,
+                              boxShadow: '0 4px 12px rgba(46, 125, 50, 0.3)'
+                            }}
+                          >
+                             Proceed to Appointment Booking
+                          </button>
+                       </div>
+                    )}
+                 </div>
               </div>
             </div>
-
+            
+            <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', marginTop: '1rem' }}>
+              <button 
+                onClick={resetIntake}
+                className="btn-secondary flex items-center gap-2">
+                <ArrowLeft size={16} /> Retake Assessment
+              </button>
+            </div>
+            
           </div>
-
-          {/* Select Appointment Time */}
-          <div style={{ background: 'var(--neutral-100)', borderRadius: '1rem', padding: '2rem', border: '1px solid var(--neutral-400)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-              <div>
-                <h2 style={{ fontSize: '1.5rem', fontWeight: 800, marginBottom: '0.25rem' }}>Select Appointment Time</h2>
-                <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Showing available slots for Internal Medicine</div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                <button style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--neutral-300)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ChevronLeft size={16} /></button>
-                <div style={{ fontWeight: 700 }}>October 2024</div>
-                <button style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--neutral-300)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ChevronRight size={16} /></button>
-              </div>
-            </div>
-
-            {/* Calendar */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2rem' }}>
-              {[14, 15, 16, 17, 18, 19, 20].map((day, i) => {
-                const isSelected = day === 17;
-                const isPast = day < 16;
-                const hasSlots = day >= 16;
-                const labels = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
-                return (
-                  <div key={day} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                    <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '1rem', textTransform: 'uppercase' }}>{labels[i]}</div>
-                    <div style={{ 
-                      width: '64px', height: '64px', borderRadius: '50%', 
-                      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                      background: isSelected ? 'var(--secondary)' : (isPast ? 'transparent' : 'var(--neutral-300)'),
-                      color: isSelected ? 'white' : (isPast ? 'var(--neutral-400)' : 'var(--text-main)'),
-                      fontWeight: 700, fontSize: '1.25rem',
-                      boxShadow: isSelected ? '0 10px 20px rgba(13, 71, 161, 0.3)' : 'none',
-                      cursor: isPast ? 'not-allowed' : 'pointer'
-                    }}>
-                      {day}
-                      {hasSlots && !isSelected && <div style={{ width: '4px', height: '4px', borderRadius: '50%', background: 'var(--tertiary)', marginTop: '4px' }}></div>}
-                      {isSelected && <div style={{ fontSize: '0.5rem', fontWeight: 600, letterSpacing: '1px', marginTop: '2px', opacity: 0.8 }}>SELECTED</div>}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Slots */}
-            <div>
-              <div style={{ fontSize: '0.875rem', fontWeight: 600, marginBottom: '1rem' }}>Available Slots for Oct 17</div>
-              <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-                {['09:00 AM', '10:30 AM', '01:15 PM', '03:00 PM', '04:30 PM'].map(time => (
-                  <button key={time} style={{ 
-                    padding: '0.5rem 1.25rem', borderRadius: '9999px', fontSize: '0.875rem', fontWeight: 600,
-                    background: time === '01:15 PM' ? 'var(--primary)' : 'var(--neutral-300)',
-                    color: time === '01:15 PM' ? 'white' : 'var(--text-main)'
-                  }}>
-                    {time}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Bottom Actions */}
-        <div style={{ width: '100%', maxWidth: '1000px', display: 'flex', justifyContent: 'space-between', marginTop: '3rem' }}>
-          <Link to="/landing" className="btn-secondary flex items-center gap-2" style={{ textDecoration: 'none' }}>
-            <ArrowLeft size={16} /> Back to Symptoms
-          </Link>
-          <Link to="/" className="btn-primary flex items-center gap-2" style={{ textDecoration: 'none' }}>
-            Confirm & Proceed <ArrowRight size={16} />
-          </Link>
-        </div>
+        )}
 
       </div>
     </LayoutSidebar>
