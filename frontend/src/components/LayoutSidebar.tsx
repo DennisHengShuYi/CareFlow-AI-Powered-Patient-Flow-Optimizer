@@ -1,8 +1,10 @@
 import { Link, useLocation } from 'react-router-dom';
 import { LayoutDashboard, Users, FileText, Building, Calendar, HelpCircle, LogOut } from 'lucide-react';
+import { SignedIn, SignedOut, UserButton, useClerk } from '@clerk/clerk-react';
 
 export default function LayoutSidebar({ children }: { children: React.ReactNode }) {
   const location = useLocation();
+  const { signOut } = useClerk();
 
   const links = [
     { name: 'Dashboard', path: '/', icon: LayoutDashboard },
@@ -66,15 +68,26 @@ export default function LayoutSidebar({ children }: { children: React.ReactNode 
         <div style={{ padding: '2rem 1.5rem 0', borderTop: '1px solid var(--neutral-400)', display: 'flex', flexDirection: 'column', gap: '1.5rem', overflow: 'hidden' }}>
           <div className="flex-col gap-4 text-sm text-muted font-medium ml-2">
             <Link to="#" className="flex items-center gap-2 hover:text-secondary whitespace-nowrap"><HelpCircle size={18} style={{ minWidth: '18px' }}/> <span>Support</span></Link>
-            <Link to="#" className="flex items-center gap-2 hover:text-secondary whitespace-nowrap" style={{ marginTop: '1rem' }}><LogOut size={18} style={{ minWidth: '18px' }}/> <span>Logout</span></Link>
+            <SignedIn>
+              <button onClick={() => signOut()} className="flex items-center gap-2 hover:text-secondary whitespace-nowrap bg-transparent border-none outline-none cursor-pointer text-muted font-medium" style={{ marginTop: '1rem', padding: 0 }}><LogOut size={18} style={{ minWidth: '18px' }}/> <span>Logout</span></button>
+            </SignedIn>
           </div>
-          <div className="flex items-center gap-3">
-            <div style={{ width: '40px', height: '40px', minWidth: '40px', borderRadius: '50%', background: '#000' }}></div>
-            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-              <div className="text-sm font-bold" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Dr. E. Vance</div>
-              <div className="text-xs text-muted" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Attending</div>
+          
+          <SignedIn>
+            <div className="flex items-center gap-3">
+              <UserButton />
+              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                <div className="text-sm font-bold" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Authorized User</div>
+                <div className="text-xs text-muted" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>System Ready</div>
+              </div>
             </div>
-          </div>
+          </SignedIn>
+
+          <SignedOut>
+            <Link to="/sign-in" className="btn-primary flex items-center justify-center w-full" style={{ borderRadius: '8px', padding: '0.75rem', textDecoration: 'none' }}>
+              Sign In
+            </Link>
+          </SignedOut>
         </div>
       </aside>
 
