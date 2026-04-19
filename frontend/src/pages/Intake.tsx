@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { ShieldAlert, HeartPulse, MapPin, CheckCircle2, ChevronRight, ChevronLeft, ArrowLeft, ArrowRight, Mic, Upload, Type, Loader2, X, FileText } from 'lucide-react';
 import { useAuth } from '@clerk/clerk-react';
 import { useProfile } from '../hooks/useProfile';
-import { supabase } from '../lib/supabase';
+
 
 export default function Intake() {
   const { getToken } = useAuth();
@@ -32,41 +32,32 @@ export default function Intake() {
 
   // Recommendation State
   const { profile } = useProfile();
-  const [recommendation, setRecommendation] = useState<any>(null);
+  const [recommendations, setRecommendations] = useState<any[]>([]);
+  const [recLoading, setRecLoading] = useState(false);
 
   const fetchRecommendations = async (triage: any) => {
-    if (!profile?.location) return;
-
+    setRecLoading(true);
     try {
-      // 1. Fetch hospitals near the user's location
-      // Simple keyword match for now
-      const area = profile.location.split(' - ')[0] || profile.location;
-      
-      const { data: hospitals, error: hError } = await supabase
-        .from('hospitals')
-        .select('*, departments(*)')
-        .ilike('address', `%${area}%`);
-
-      if (hError) throw hError;
-      if (!hospitals || hospitals.length === 0) return;
-
-      // 2. Rank by specialty match
-      const specialty = triage.recommended_specialist?.toLowerCase() || '';
-      
-      const scoredHospitals = hospitals.map(h => {
-        let score = 0;
-        const hasSpecialty = h.departments?.some((d: any) => 
-          specialty.includes(d.name.toLowerCase()) || d.name.toLowerCase().includes(specialty)
-        );
-        if (hasSpecialty) score += 10;
-        return { ...h, score, hasSpecialty };
+      const token = await getToken();
+      const res = await fetch('http://localhost:8002/api/hospitals/recommend', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          specialist: triage.recommended_specialist || '',
+          chief_complaint: triage.chief_complaint || '',
+          location: profile?.location || '',
+        })
       });
-
-      // Sort by score and take the best one
-      const best = scoredHospitals.sort((a, b) => b.score - a.score)[0];
-      setRecommendation(best);
+      if (!res.ok) throw new Error('Failed to fetch recommendations');
+      const data = await res.json();
+      setRecommendations(data.recommendations || []);
     } catch (err) {
       console.error('Error fetching recommendations:', err);
+    } finally {
+      setRecLoading(false);
     }
   };
 
@@ -80,7 +71,7 @@ export default function Intake() {
     setFollowUpResponse('');
     setIsFollowingUp(false);
     setInputMode('text');
-    setRecommendation(null);
+    setRecommendations([]);
   };
 
   const processTriageText = async (text: string) => {
@@ -381,29 +372,133 @@ export default function Intake() {
                   </div>
                 </div>
 
-                {recommendation && (
-                  <div style={{ background: 'white', borderRadius: '16px', padding: '1.5rem', marginBottom: triageData.red_flags?.length > 0 ? '1rem' : '0', border: '1px solid var(--primary-fixed)', position: 'relative', overflow: 'hidden' }}>
-                    <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--primary)', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <MapPin size={14} /> NEAREST FACILITY
+                {/* ── Hospital Recommendations ─────────────────────── */}
+                <div style={{ background: 'white', borderRadius: '16px', padding: '1.5rem', marginBottom: triageData.red_flags?.length > 0 ? '1rem' : '0', border: '1px solid var(--neutral-400)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+                    <div>
+                      <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.25rem' }}>
+                        <MapPin size={13} /> AI HOSPITAL RECOMMENDATIONS
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                        Ranked by specialty match &amp; proximity to your location
+                      </div>
                     </div>
-                    <div style={{ fontWeight: 800, fontSize: '1.125rem', marginBottom: '0.25rem' }}>{recommendation.name}</div>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1rem', lineHeight: 1.4 }}>{recommendation.address}</div>
-                    
-                    {recommendation.hasSpecialty && (
-                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', background: 'rgba(102,187,106,0.1)', color: '#2e7d32', padding: '0.25rem 0.6rem', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600, marginBottom: '1rem' }}>
-                        <CheckCircle2 size={12} /> Matches Needed Specialty
+                    {profile?.location && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'var(--neutral-200)', padding: '0.35rem 0.75rem', borderRadius: '9999px', fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                        <MapPin size={11} />
+                        {profile.location}
                       </div>
                     )}
-
-                    <Link 
-                      to="/appointments" 
-                      className="btn-primary" 
-                      style={{ width: '100%', padding: '0.6rem', fontSize: '0.875rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', background: 'var(--primary)', color: 'white' }}
-                    >
-                      Book at this Facility <ChevronRight size={14} />
-                    </Link>
                   </div>
-                )}
+
+                  {recLoading ? (
+                    // Skeleton loader
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                      {[1, 2, 3].map(i => (
+                        <div key={i} style={{ height: '80px', background: 'var(--neutral-200)', borderRadius: '12px', animation: 'pulse 1.5s ease-in-out infinite' }} />
+                      ))}
+                    </div>
+                  ) : recommendations.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                      <MapPin size={28} style={{ opacity: 0.3, marginBottom: '0.75rem', display: 'block', margin: '0 auto 0.75rem' }} />
+                      No hospitals found. Please ensure your profile location is set.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                      {recommendations.map((hosp, idx) => {
+                        const isTop = idx === 0;
+                        return (
+                          <div key={hosp.id} style={{
+                            border: `1.5px solid ${isTop ? 'var(--primary)' : 'var(--neutral-400)'}`,
+                            borderRadius: '14px',
+                            padding: '1rem 1.25rem',
+                            background: isTop ? 'linear-gradient(135deg, #f0f7ff 0%, #e8f4fd 100%)' : 'white',
+                            position: 'relative',
+                            transition: 'box-shadow 0.2s',
+                          }}>
+                            {/* Rank badge */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                                <div style={{
+                                  width: '26px', height: '26px', borderRadius: '50%',
+                                  background: isTop ? 'var(--primary)' : 'var(--neutral-300)',
+                                  color: isTop ? 'white' : 'var(--text-muted)',
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  fontSize: '0.7rem', fontWeight: 800, flexShrink: 0
+                                }}>
+                                  #{idx + 1}
+                                </div>
+                                <div>
+                                  <div style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-main)' }}>
+                                    {hosp.name}
+                                  </div>
+                                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.1rem' }}>
+                                    {hosp.address}
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Match score badge */}
+                              <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: '0.5rem' }}>
+                                <div style={{
+                                  display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                                  padding: '0.2rem 0.6rem', borderRadius: '9999px', fontSize: '0.7rem', fontWeight: 700,
+                                  background: hosp.specialty_match ? 'rgba(46,125,50,0.1)' : 'var(--neutral-200)',
+                                  color: hosp.specialty_match ? '#2e7d32' : 'var(--text-muted)',
+                                }}>
+                                  {hosp.specialty_match ? <CheckCircle2 size={11} /> : null}
+                                  {hosp.specialty_match ? 'Specialty Match' : 'General'}
+                                </div>
+                                <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                                  {hosp.distance_note}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Matched departments */}
+                            {hosp.matched_departments.length > 0 && (
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginBottom: '0.65rem' }}>
+                                {hosp.matched_departments.map((d: string, i: number) => (
+                                  <span key={i} style={{
+                                    background: 'rgba(25,118,210,0.1)', color: 'var(--primary)',
+                                    padding: '0.2rem 0.55rem', borderRadius: '6px', fontSize: '0.7rem', fontWeight: 600
+                                  }}>
+                                    <HeartPulse size={9} style={{ display: 'inline', marginRight: '3px' }} />
+                                    {d}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* All departments list (collapsed) */}
+                            {hosp.all_departments.length > 0 && (
+                              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+                                Departments: {hosp.all_departments.join(' · ')}
+                              </div>
+                            )}
+
+                            {/* Footer row */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              {hosp.contact_number ? (
+                                <a href={`tel:${hosp.contact_number}`} style={{ fontSize: '0.75rem', color: 'var(--primary)', fontWeight: 600, textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                                  📞 {hosp.contact_number}
+                                </a>
+                              ) : <span />}
+                              <Link
+                                to="/appointments"
+                                className="btn-primary"
+                                style={{ padding: '0.5rem 1rem', fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '0.35rem', background: isTop ? 'var(--primary)' : 'var(--neutral-300)', color: isTop ? 'white' : 'var(--text-main)', borderRadius: '9999px' }}
+                              >
+                                Book Here <ChevronRight size={13} />
+                              </Link>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
                 
                 {triageData.red_flags?.length > 0 && (
                    <div style={{ background: '#ffebee', borderRadius: '16px', padding: '1.5rem', marginTop: '1.5rem', border: '1px solid #ffcdd2' }}>

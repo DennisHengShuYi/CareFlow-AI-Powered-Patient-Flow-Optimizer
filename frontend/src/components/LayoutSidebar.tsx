@@ -33,8 +33,8 @@ export default function LayoutSidebar({ children }: { children: React.ReactNode 
       }}>
         <div style={{ padding: '0 2rem', marginBottom: '3rem', display: 'flex', alignItems: 'center', gap: '0.75rem', overflow: 'hidden' }} className="center-on-mobile">
           <div style={{ width: '32px', height: '32px', minWidth: '32px', borderRadius: '50%', background: 'var(--primary)', color: 'white', display: 'flex', justifyContent: 'center', alignItems: 'center', fontWeight: 'bold' }}>+</div>
-          <Link to="/landing" style={{ whiteSpace: 'nowrap' }} className="hide-on-mobile">
-            <h2 style={{ fontSize: '1.25rem', color: 'var(--secondary)' }}>MediRoute</h2>
+          <Link to="/" style={{ whiteSpace: 'nowrap' }} className="hide-on-mobile">
+            <h2 style={{ fontSize: '1.25rem', color: 'var(--secondary)' }}>CareFlow</h2>
             <div style={{ fontSize: '0.65rem', letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Healthcare<br/>Intelligence</div>
           </Link>
         </div>

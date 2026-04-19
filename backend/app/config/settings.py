@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Literal
+from pydantic import Field
 
 # Calculate absolute path to the root .env file
 # settings.py is in backend/app/config/ -> 4 levels up to reach root
@@ -33,8 +34,12 @@ class Settings(BaseSettings):
     RATE_LIMIT_WINDOW_SECONDS: int = 60
 
     # Clerk Auth (replaces JWT)
-    CLERK_SECRET_KEY: str           # sk_live_... or sk_test_... from Clerk dashboard
+    CLERK_SECRET_KEY: str = ""      # sk_live_... or sk_test_... from Clerk dashboard
     CLERK_JWKS_URL: str = ""        # Optional: auto-derived from secret key if blank
+
+    # Supabase REST (Fallback for DB connection issues)
+    SUPABASE_URL: str = Field(default="", alias="VITE_SUPABASE_URL")
+    SUPABASE_SERVICE_ROLE_KEY: str = ""
 
     model_config = SettingsConfigDict(
         env_file=str(ENV_PATH),

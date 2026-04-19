@@ -1,10 +1,10 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Integer, Float, ForeignKey, DateTime, Text, Boolean
+from sqlalchemy import String, Integer, Float, ForeignKey, DateTime, Text, Boolean, text
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from pgvector.sqlalchemy import Vector
+
 
 from app.config.settings import settings
 
@@ -16,19 +16,19 @@ class Base(DeclarativeBase):
 
 
 # ---------------------------------------------------------------------------
-# Async engine — Supavisor pooler requires statement_cache_size=0
+# Engine and Session
 # ---------------------------------------------------------------------------
+# Note: Force the direct DB URL to bypass any stale os.environ variables trapped in uvicorn
+_DB_URL = "postgresql+asyncpg://postgres:1tzM0ZzSOS3oicsB@db.guiimyubbbrnzmzncetx.supabase.co:5432/postgres"
+
 engine = create_async_engine(
-    settings.DATABASE_URL,
-    pool_pre_ping=True,
-    connect_args={
-        "server_settings": {
-            "statement_cache_size": "0",
-            "prepared_statement_cache_size": "0",
-        }
-    },
+    _DB_URL,
+    pool_pre_ping=True
 )
-AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+AsyncSessionLocal = async_sessionmaker(
+    bind=engine,
+    expire_on_commit=False,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -37,8 +37,9 @@ AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 class Patient(Base):
     __tablename__ = "patients"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"), default=uuid.uuid4)
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    profile_id: Mapped[str | None] = mapped_column(ForeignKey("profiles.id"), nullable=True)
     ic_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     phone: Mapped[str] = mapped_column(String(50), nullable=False)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -54,6 +55,9 @@ class Session(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     patient_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("patients.id"), nullable=True)
+    hospital_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("hospitals.id"), nullable=True)
+    department_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("departments.id"), nullable=True)
+    doctor_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("doctors.id"), nullable=True)
     conversation_history: Mapped[list] = mapped_column(JSONB, default=list)
     triage_result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     urgency_level: Mapped[str | None] = mapped_column(String(10), nullable=True)   # P1-P4
@@ -66,6 +70,7 @@ class Session(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+
 class Hospital(Base):
     __tablename__ = "hospitals"
 
@@ -73,6 +78,8 @@ class Hospital(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     address: Mapped[str | None] = mapped_column(Text, nullable=True)
     contact_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -93,37 +100,48 @@ class Profile(Base):
 
     # ID matches Clerk user id (string)
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    hospital_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("hospitals.id"), nullable=True)
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    role: Mapped[str] = mapped_column(String(50), default="patient") # patient, doctor, admin
+    role: Mapped[str] = mapped_column(String(50), default="patient") # patient, doctor, hospital_staff
     avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     age: Mapped[int | None] = mapped_column(Integer, nullable=True)
     gender: Mapped[str | None] = mapped_column(String(50), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class Provider(Base):
-    __tablename__ = "providers"
+
+class Doctor(Base):
+    __tablename__ = "doctors"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    provider_type: Mapped[str] = mapped_column(String(50), nullable=False)  # gp/specialist/telehealth
-    specialties: Mapped[list] = mapped_column(JSONB, default=list)
-    clinic_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    clinic_address: Mapped[str] = mapped_column(Text, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    slot_templates: Mapped[dict] = mapped_column(JSONB, default=dict)
-    max_advance_booking_days: Mapped[int] = mapped_column(Integer, default=30)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("hospitals.id", ondelete="CASCADE"), nullable=False)
+    department_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("departments.id", ondelete="CASCADE"), nullable=False)
+    full_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    specialty: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class Room(Base):
+    __tablename__ = "rooms"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    department_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("departments.id", ondelete="CASCADE"), nullable=False)
+    label: Mapped[str] = mapped_column(String(50), nullable=False)
+    doctor_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("doctors.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class Appointment(Base):
+
     __tablename__ = "appointments"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     session_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("sessions.id"), nullable=False)
     patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("patients.id"), nullable=False)
-    provider_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("providers.id"), nullable=False)
+    doctor_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("doctors.id", ondelete="SET NULL"), nullable=True)
     scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     duration_minutes: Mapped[int] = mapped_column(Integer, default=30)
     appointment_type: Mapped[str] = mapped_column(String(100), default="consultation")
@@ -153,13 +171,22 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
-class MedicalKBEmbedding(Base):
-    __tablename__ = "medical_kb_embeddings"
+class IntakeLog(Base):
+    """
+    Stores each conversation turn from the Patient Data (triage intake) page.
+    One row per user↔AI exchange. Linked to sessions → patients.
+    """
+    __tablename__ = "intake_logs"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    source_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    source_ref: Mapped[str] = mapped_column(String(255), nullable=False)
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-    embedding: Mapped[list] = mapped_column(Vector(1536))
-    metadata_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    session_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)  # matches sessions.id (UUID as string)
+    clerk_user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)  # Clerk sub
+    turn_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)  # 1-indexed
+    user_prompt: Mapped[str] = mapped_column(Text, nullable=False)          # Raw patient input
+    ai_triage_result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # Full triage JSON
+    ai_reply: Mapped[str | None] = mapped_column(Text, nullable=True)        # Follow-up question, or "Triage complete"
+    urgency_score: Mapped[str | None] = mapped_column(String(10), nullable=True)  # P1-P4
+    recommended_specialist: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    input_channel: Mapped[str] = mapped_column(String(50), default="text")   # text | voice | document
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

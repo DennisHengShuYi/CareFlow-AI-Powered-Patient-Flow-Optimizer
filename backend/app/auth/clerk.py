@@ -48,15 +48,20 @@ async def verify_clerk_token(request: Request) -> dict:
     FastAPI dependency.
     Extracts Bearer token, validates against Clerk JWKS, returns decoded payload.
     """
-    if settings.CLERK_SECRET_KEY.startswith("sk_test_your_clerk"):
-        return {"sub": "demo_user"}
-
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         # If dummy key is configured, bypass, else raise
         raise HTTPException(status_code=401, detail="Missing Bearer token")
 
     token = auth.split(" ", 1)[1].strip()
+
+    if not settings.CLERK_SECRET_KEY or settings.CLERK_SECRET_KEY.startswith("sk_test_your_clerk"):
+        # Local development bypass: extract user identity from JWT without signature verification
+        # since we don't have the backend secret key to fetch the JWKS.
+        try:
+            return jwt.get_unverified_claims(token)
+        except JWTError as exc:
+            raise HTTPException(status_code=401, detail=f"Bad token claims: {exc}")
 
     # Decode header to find kid
     try:

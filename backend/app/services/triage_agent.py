@@ -64,9 +64,6 @@ URGENCY DEFINITIONS:
   P3 = Urgent (seen within 30-60 min)
   P4 = Semi-urgent / non-urgent (can wait)
 
-MEDICAL KNOWLEDGE BASE (top-5 relevant chunks):
-{rag_context}
-
 FEW-SHOT EXAMPLES:
 
 --- Example 1 (English, P4 with Follow-up) ---
@@ -160,6 +157,34 @@ Output:
 }}
 
 OUTPUT RULE: Return ONLY raw JSON matching the schema above. No markdown fences. No extra keys.
+
+RECOMMENDED_SPECIALIST RULE: The `recommended_specialist` field MUST be exactly one value from this approved list:
+  - Emergency Department
+  - General Medicine
+  - Pediatrics
+  - Obstetrics & Gynecology
+  - General Surgery
+  - Cardiology
+  - Orthopedics
+  - Oncology
+  - Neurology
+  - Psychiatry
+  - Dermatology
+  - Gastroenterology
+  - Urology
+  - Radiology
+  - Pathology / Laboratory
+  - Pharmacy
+  - Rehabilitation / Physiotherapy
+  - Intensive Care Unit (ICU)
+  - Neonatal ICU (NICU)
+  - Operating Theater
+  - General Practice (GP)
+  - Dental Clinic
+  - Ophthalmology
+  - ENT (Ear, Nose & Throat)
+
+Do NOT use free-form text or invent a new specialty. Pick the closest match from the list above.
 """
 
 # ---------------------------------------------------------------------------
@@ -180,30 +205,6 @@ def sanitise(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# RAG retrieval
-# ---------------------------------------------------------------------------
-async def _retrieve_rag_context(query: str) -> str:
-    try:
-        from app.models.db import AsyncSessionLocal, MedicalKBEmbedding
-
-        embedding = await llm.embed(query)
-        async with AsyncSessionLocal() as session:
-            # pgvector cosine distance operator via ORM expression
-            stmt = (
-                select(MedicalKBEmbedding.content)
-                .order_by(MedicalKBEmbedding.embedding.cosine_distance(embedding))
-                .limit(5)
-            )
-            results = await session.execute(stmt)
-            chunks = [row[0] for row in results]
-
-        return "\n---\n".join(chunks) if chunks else "No additional KB context available."
-    except Exception as exc:
-        # RAG failure should never crash triage — degrade gracefully
-        return f"KB unavailable: {exc}"
-
-
-# ---------------------------------------------------------------------------
 # Triage agent
 # ---------------------------------------------------------------------------
 class TriageAgent:
@@ -221,8 +222,7 @@ class TriageAgent:
           - Appending turns to Redis after this returns
         """
         safe_input = sanitise(user_text)
-        rag_context = await _retrieve_rag_context(user_text)
-        system_prompt = _SYSTEM_TEMPLATE.format(rag_context=rag_context)
+        system_prompt = _SYSTEM_TEMPLATE
 
         # Build prompt with conversation history
         history_block = ""

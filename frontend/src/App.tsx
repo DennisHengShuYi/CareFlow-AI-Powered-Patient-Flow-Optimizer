@@ -152,7 +152,7 @@ function App() {
         
         {/* Patient Routes */}
         <Route path="/intake" element={<ProtectedRoute allowedRoles={['patient']}><Intake /></ProtectedRoute>} />
-        <Route path="/departments" element={<ProtectedRoute allowedRoles={['patient']}><Departments /></ProtectedRoute>} />
+        <Route path="/departments" element={<ProtectedRoute allowedRoles={['hospital_staff']}><Departments /></ProtectedRoute>} />
         <Route path="/appointments" element={<ProtectedRoute allowedRoles={['patient']}><Appointments /></ProtectedRoute>} />
         
         {/* Fallback */}

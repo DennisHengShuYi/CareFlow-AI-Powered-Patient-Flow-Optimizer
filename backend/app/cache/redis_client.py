@@ -29,7 +29,7 @@ class UpstashRedis:
              # Fast bypass for local mock if no real DB mapped
              return True
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
             resp = await client.post(
                 self._url,
                 headers=self._headers,

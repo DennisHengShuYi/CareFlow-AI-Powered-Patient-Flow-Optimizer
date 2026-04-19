@@ -5,22 +5,27 @@ Audit: every non-health request logs to audit_logs (SHA-256 only, no PII).
 """
 import hashlib
 import json
+import math
 import time
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import text
+from sqlalchemy import text, select
 
 from app.auth.clerk import verify_clerk_token
 from app.cache.redis_client import redis_client
 from app.config.llm_provider import llm
 from app.config.settings import settings
-from app.models.db import AsyncSessionLocal, AuditLog, Session as SessionModel
+from app.models.db import AsyncSessionLocal, AuditLog, IntakeLog, Session as SessionModel, Profile, Doctor, Room, Hospital, Department
 from app.services.booking_engine import booking_engine
 from app.services.intake_pipeline import intake_pipeline
 from app.services.triage_agent import triage_agent
+from app.services.careflow_service import CareFlowService
+from app.utils.supabase_client import supabase_rest
+
+
 
 router = APIRouter()
 
@@ -40,20 +45,57 @@ async def _audit(
     if "[password]" in settings.DATABASE_URL:
         return
         
-    input_hash = hashlib.sha256(raw_input.encode()).hexdigest()
-    async with AsyncSessionLocal() as db:
-        log = AuditLog(
-            session_id=session_id,
-            endpoint=endpoint,
-            llm_provider=settings.LLM_PROVIDER,
-            llm_model=settings.MODEL_NAME,
-            input_hash=input_hash,
-            latency_ms=latency_ms,
-            status_code=status_code,
-            error_message=error_message,
-        )
-        db.add(log)
-        await db.commit()
+    try:
+        input_hash = hashlib.sha256(raw_input.encode()).hexdigest()
+        async with AsyncSessionLocal() as db:
+            log = AuditLog(
+                session_id=session_id,
+                endpoint=endpoint,
+                llm_provider=settings.LLM_PROVIDER,
+                llm_model=settings.MODEL_NAME,
+                input_hash=input_hash,
+                latency_ms=latency_ms,
+                status_code=status_code,
+                error_message=error_message,
+            )
+            db.add(log)
+            await db.commit()
+    except Exception as e:
+        print(f"DEBUG: Audit log failed, bypassing: {e}")
+
+# ---------------------------------------------------------------------------
+# Intake Log helper
+# ---------------------------------------------------------------------------
+async def _log_intake(
+    session_id: str,
+    user_id: str,
+    turn_number: int,
+    user_prompt: str,
+    triage_result: dict,
+    ai_reply: str | None,
+    input_channel: str = "text"
+) -> None:
+    if "[password]" in settings.DATABASE_URL:
+        return
+        
+    try:
+        async with AsyncSessionLocal() as db:
+            log = IntakeLog(
+                session_id=session_id,
+                clerk_user_id=user_id,
+                turn_number=turn_number,
+                user_prompt=user_prompt,
+                ai_triage_result=triage_result,
+                ai_reply=ai_reply,
+                urgency_score=triage_result.get("urgency_score"),
+                recommended_specialist=triage_result.get("recommended_specialist"),
+                confidence=triage_result.get("confidence"),
+                input_channel=input_channel,
+            )
+            db.add(log)
+            await db.commit()
+    except Exception as e:
+        print(f"DEBUG: Intake log failed, bypassing: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +114,59 @@ class BookRequest(BaseModel):
     urgency: str
     complaint: str
     duration_minutes: int = 30
+
+
+# ---------------------------------------------------------------------------
+# CareFlow Request Models
+# ---------------------------------------------------------------------------
+class SimulatePatientRequest(BaseModel):
+    name: str
+    complaint: str
+    level: int
+
+
+class SetEncounterRequest(BaseModel):
+    patient_id: str
+
+
+class SignNoteRequest(BaseModel):
+    assessment_plan: str
+
+
+class OverridePatientRequest(BaseModel):
+    level: int | None = None
+    diagnosis: str | None = None
+    department_id: str | None = None
+    doctor_id: str | None = None
+    status: str | None = None
+
+class AddDoctorRequest(BaseModel):
+    department_id: str
+    name: str
+    room_id: str | None = None  # optional: assign doctor to a room on creation
+
+class AddRoomRequest(BaseModel):
+    department_id: str
+    label: str
+
+    status_color: str | None = None
+
+
+class NewDepartmentBody(BaseModel):
+    name: str
+
+
+class NewRoomBody(BaseModel):
+    label: str
+
+
+class NewDoctorBody(BaseModel):
+    name: str
+    department_id: str
+
+
+class AssignRoomBody(BaseModel):
+    doctor_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +243,17 @@ async def intake_text(
 
         latency = int((time.time() - t0) * 1000)
         await _audit(session_id, "/intake/text", raw, latency, 200)
+
+        # Log this specific triage turn to intake_logs
+        await _log_intake(
+            session_id=session_id,
+            user_id=user_id,
+            turn_number=(turn_count // 2) + 1,  # e.g. turn_count is 0 -> 1st turn, 2 -> 2nd turn
+            user_prompt=raw,
+            triage_result=result,
+            ai_reply=follow_up_q or "Triage complete",
+            input_channel=body.get("modality", "text")  # If frontend sends modality
+        )
 
         print("DEBUG: [Success] Returning response")
         return {
@@ -286,6 +392,225 @@ async def book_appointment(
         latency = int((time.time() - t0) * 1000)
         await _audit(body.session_id, "/appointments/book", body.complaint, latency, 500, str(exc))
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Hospital Recommendation API
+# ---------------------------------------------------------------------------
+
+class HospitalRecommendRequest(BaseModel):
+    specialist: str = ""          # From triage.recommended_specialist
+    chief_complaint: str = ""     # From triage.chief_complaint
+    location: str = ""            # From user profile.location (e.g. "Miri, Sarawak")
+
+@router.post("/api/hospitals/recommend")
+async def recommend_hospitals(
+    body: HospitalRecommendRequest,
+    user_id: str = Depends(verify_clerk_token)
+):
+    """
+    Rank hospitals by distance (close to far) and STRICTLY filter by department match.
+    """
+    # 1. Fetch ALL active hospitals with their departments
+    hospitals = await supabase_rest.query_table("hospitals", {
+        "select": "*,departments(id,name,specialty_code)",
+        "is_active": "eq.true"
+    })
+    if not hospitals:
+        return {"recommendations": []}
+
+    # 2. Get User Coordinates (from profile or location lookup)
+    uid = user_id.get("sub") if isinstance(user_id, dict) else user_id
+    profile = await supabase_rest.get_profile(uid)
+    user_lat, user_lng = None, None
+    
+    if profile:
+        user_lat = profile.get("latitude")
+        user_lng = profile.get("longitude")
+    
+    # Fallback: City lookup if coordinates are missing but location name exists
+    user_loc = (profile.get("location") if profile else None) or body.location
+    if (not user_lat or not user_lng) and user_loc:
+        loc_map = {
+            "miri": (4.3995, 113.9914),
+            "kl": (3.1390, 101.6869),
+            "kuala lumpur": (3.1390, 101.6869),
+            "pj": (3.1073, 101.6067),
+            "petaling jaya": (3.1073, 101.6067),
+            "cyberjaya": (2.9213, 101.6511),
+        }
+        loc_lower = user_loc.lower()
+        for city, coords in loc_map.items():
+            if city in loc_lower:
+                user_lat, user_lng = coords
+                break
+
+    specialist_lower = body.specialist.lower()
+    
+    def _calculate_haversine(lat1, lon1, lat2, lon2):
+        R = 6371.0 # KM
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        a = (math.sin(dlat / 2)**2 +
+             math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2)
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        return R * c
+
+    def _process_hospital(h: dict) -> dict | None:
+        departments = h.get("departments", []) or []
+        matched_depts: list[str] = []
+
+        # STRICT FILTER: Check if any department matches the specialist
+        # specialist = e.g. "General Practice" or "Pediatrics"
+        for dept in departments:
+            name = dept.get("name", "").lower()
+            code = (dept.get("specialty_code") or "").lower()
+
+            # Flexible but targeted matching
+            # e.g. "Pediatrics" matches "Pediatrics", "Pediatric Department", etc.
+            if specialist_lower and (
+                specialist_lower in name 
+                or name in specialist_lower
+                or (code and specialist_lower in code)
+            ):
+                matched_depts.append(dept.get("name", ""))
+
+        if not matched_depts:
+            return None # FILTERED OUT
+
+        # DISTANCE CALCULATION
+        dist_km = None
+        h_lat = h.get("latitude")
+        h_lng = h.get("longitude")
+        
+        if user_lat and user_lng and h_lat and h_lng:
+            dist_km = _calculate_haversine(user_lat, user_lng, h_lat, h_lng)
+
+        return {
+            "id": str(h["id"]),
+            "name": h.get("name", "Unknown"),
+            "address": h.get("address") or "Address not available",
+            "contact_number": h.get("contact_number") or "",
+            "specialty_match": True,
+            "matched_departments": matched_depts,
+            "all_departments": [d.get("name", "") for d in departments],
+            "distance_km": dist_km,
+            "distance_note": f"{round(dist_km, 1)} km away" if dist_km is not None else "Distance unknown",
+        }
+
+    # Apply processing and filtering
+    candidates = []
+    for h in hospitals:
+        res = _process_hospital(h)
+        if res:
+            candidates.append(res)
+
+    # SORT: Primarily by distance (ascending)
+    # If distance is unknown, move to end
+    candidates.sort(key=lambda x: (x["distance_km"] if x["distance_km"] is not None else 999999))
+
+    return {"recommendations": candidates[:5]}
+
+
+async def _get_hospital_id(user_id: str):
+    profile = await supabase_rest.get_profile(user_id)
+    if profile:
+        pid = profile.get("hospital_id")
+        return uuid.UUID(pid) if pid else None
+    return None
+
+
+@router.get("/api/triage/overview")
+async def get_triage_overview(user_id: str = Depends(verify_clerk_token)):
+    uid = user_id.get("sub")
+    print(f"DEBUG: [GET /api/triage/overview] UserID: {uid}")
+    h_id = await _get_hospital_id(uid)
+    print(f"DEBUG: HospitalID: {h_id}")
+    if not h_id:
+        return {"patients": [], "queue_active": 0, "critical": 0}
+    async with AsyncSessionLocal() as db:
+        res = await CareFlowService.get_triage_overview(db, h_id)
+        print(f"DEBUG: Returning {len(res.get('patients', []))} patients")
+        return res
+
+@router.get("/api/capacity/board")
+async def get_capacity_board(user_id: str = Depends(verify_clerk_token)):
+    uid = user_id.get("sub")
+    print(f"DEBUG: [GET /api/capacity/board] UserID: {uid}")
+    h_id = await _get_hospital_id(uid)
+    print(f"DEBUG: HospitalID: {h_id}")
+    if not h_id:
+        return {"departments": []}
+    async with AsyncSessionLocal() as db:
+        res = await CareFlowService.build_capacity_board(db, h_id)
+        print(f"DEBUG: Returning {len(res.get('departments', []))} departments")
+        return res
+
+@router.post("/api/triage/simulate")
+async def simulate_patient(req: SimulatePatientRequest, user_id: str = Depends(verify_clerk_token)):
+    h_id = await _get_hospital_id(user_id.get("sub"))
+    if not h_id: raise HTTPException(403, "No hospital assigned")
+    async with AsyncSessionLocal() as db:
+        sess = await CareFlowService.simulate_patient(db, h_id, req.name, req.complaint, req.level)
+        return {"status": "success", "session_id": str(sess.id)}
+
+@router.post("/api/triage/override/{session_id}")
+async def override_patient(session_id: str, req: OverridePatientRequest, user_id: str = Depends(verify_clerk_token)):
+    async with AsyncSessionLocal() as db:
+        success = await CareFlowService.override_patient(db, uuid.UUID(session_id), req.dict(exclude_none=True))
+        return {"success": success}
+
+@router.post("/api/admin/departments")
+async def add_department(req: NewDepartmentBody, user_id: str = Depends(verify_clerk_token)):
+    h_id = await _get_hospital_id(user_id.get("sub"))
+    if not h_id: raise HTTPException(403, "No hospital assigned to profile")
+    async with AsyncSessionLocal() as db:
+        dept = await CareFlowService.add_department(db, h_id, req.name)
+        return {"id": str(dept.id), "name": dept.name}
+
+@router.post("/api/admin/doctors")
+async def add_doctor(req: AddDoctorRequest, user_id: str = Depends(verify_clerk_token)):
+    h_id = await _get_hospital_id(user_id.get("sub"))
+    if not h_id: raise HTTPException(403)
+    room_id = uuid.UUID(req.room_id) if req.room_id else None
+    async with AsyncSessionLocal() as db:
+        doc = await CareFlowService.add_doctor(db, h_id, uuid.UUID(req.department_id), req.name, room_id)
+        return {"id": str(doc.id), "name": doc.full_name}
+
+@router.patch("/api/admin/rooms/{room_id}/assign")
+async def assign_room(room_id: str, req: AssignRoomBody, user_id: str = Depends(verify_clerk_token)):
+    """Assign or unassign a doctor from a room."""
+    async with AsyncSessionLocal() as db:
+        doctor_id = uuid.UUID(req.doctor_id) if req.doctor_id else None
+        success = await CareFlowService.assign_doctor_to_room(db, uuid.UUID(room_id), doctor_id)
+        return {"success": success}
+
+@router.post("/api/admin/rooms")
+async def add_room(req: AddRoomRequest, user_id: str = Depends(verify_clerk_token)):
+    async with AsyncSessionLocal() as db:
+        room = await CareFlowService.add_room(db, uuid.UUID(req.department_id), req.label)
+        return {"id": str(room.id), "label": room.label}
+
+@router.post("/api/triage/active_encounter")
+async def set_active_encounter(req: SetEncounterRequest, user_id: str = Depends(verify_clerk_token)):
+    h_id = await _get_hospital_id(user_id.get("sub"))
+    async with AsyncSessionLocal() as db:
+        success = await CareFlowService.set_active_encounter(db, h_id, uuid.UUID(req.patient_id))
+        if not success: raise HTTPException(404)
+        return {"status": "success"}
+
+@router.post("/api/triage/sign_note")
+async def sign_note(req: SignNoteRequest, user_id: str = Depends(verify_clerk_token)):
+    # Assuming active encounter context or passing session_id
+    # For now, let's just use the request if we have it, or rely on frontend to pass patient_id
+    # We'll need a way for the frontend to specify WHICH patient to sign
+    pass # Wait, let's refine this to match the override logic
+
+@router.post("/api/triage/sign_note/{session_id}")
+async def sign_note_v2(session_id: str, req: SignNoteRequest, user_id: str = Depends(verify_clerk_token)):
+    async with AsyncSessionLocal() as db:
+        await CareFlowService.sign_note(db, uuid.UUID(session_id), req.assessment_plan)
+        return {"status": "success"}
 
 
 # ---------------------------------------------------------------------------

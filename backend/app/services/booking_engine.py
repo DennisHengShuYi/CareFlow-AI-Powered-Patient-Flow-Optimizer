@@ -9,7 +9,7 @@ from typing import Optional
 
 from sqlalchemy import select, and_
 
-from app.models.db import AsyncSessionLocal, Appointment, Provider
+from app.models.db import AsyncSessionLocal, Appointment, Doctor, Hospital
 
 # ---------------------------------------------------------------------------
 # Urgency → max days ahead
@@ -39,33 +39,32 @@ class BookingEngine:
         slots: list[dict] = []
 
         async with AsyncSessionLocal() as session:
-            # Filter active providers whose specialties array contains the requested specialty
+            # Join Doctor with Hospital to get clinic info
             stmt = (
-                select(Provider)
+                select(Doctor, Hospital)
+                .join(Hospital, Doctor.hospital_id == Hospital.id)
                 .where(
                     and_(
-                        Provider.is_active.is_(True),
-                        Provider.specialties.contains([specialty]),
+                        Hospital.is_active.is_(True),
+                        Doctor.specialty.ilike(f"%{specialty}%"),
                     )
                 )
                 .limit(10)
             )
             result = await session.execute(stmt)
-            providers = result.scalars().all()
+            rows = result.all() # list of (Doctor, Hospital) tuples
 
-            for prov in providers:
-                # slot_templates expected format:
-                # {"weekdays": [1,2,3,4,5], "start_hour": 8, "end_hour": 17, "slot_duration_min": 30}
-                templates = prov.slot_templates or {}
-                start_hour: int = templates.get("start_hour", 8)
-                end_hour: int = templates.get("end_hour", 17)
-                duration: int = templates.get("slot_duration_min", 30)
-                weekdays: list[int] = templates.get("weekdays", [1, 2, 3, 4, 5])
+            for doc, hosp in rows:
+                # Default templates since Doctor table is simpler
+                start_hour: int = 9
+                end_hour: int = 17
+                duration: int = 30
+                weekdays: list[int] = [1, 2, 3, 4, 5]
 
-                # Fetch existing booked appointment times for this provider
+                # Fetch existing booked appointment times for this doctor
                 booked_stmt = select(Appointment.scheduled_at).where(
                     and_(
-                        Appointment.provider_id == prov.id,
+                        Appointment.doctor_id == doc.id,
                         Appointment.status == "booked",
                         Appointment.scheduled_at >= now,
                         Appointment.scheduled_at <= cutoff,
@@ -82,9 +81,9 @@ class BookingEngine:
                             candidate = cursor.replace(hour=hour, minute=0)
                             if candidate > now and candidate not in booked_times:
                                 slots.append({
-                                    "provider_id": str(prov.id),
-                                    "clinic_name": prov.clinic_name,
-                                    "clinic_address": prov.clinic_address,
+                                    "doctor_id": str(doc.id),
+                                    "clinic_name": hosp.name,
+                                    "clinic_address": hosp.address or "Contact Hospital",
                                     "scheduled_at": candidate.isoformat(),
                                     "duration_minutes": duration,
                                     "urgency": urgency,
@@ -138,7 +137,7 @@ class BookingEngine:
                 {
                     "actor": {
                         "reference": f"Practitioner/{provider_id}",
-                        "display": "Healthcare Provider",
+                        "display": "Doctor",
                     },
                     "status": "accepted",
                 },
@@ -171,7 +170,7 @@ class BookingEngine:
                 id=appt_id,
                 session_id=uuid.UUID(session_id),
                 patient_id=uuid.UUID(patient_id),
-                provider_id=uuid.UUID(provider_id),
+                doctor_id=uuid.UUID(provider_id),
                 scheduled_at=scheduled_at,
                 duration_minutes=duration_minutes,
                 appointment_type="consultation",
