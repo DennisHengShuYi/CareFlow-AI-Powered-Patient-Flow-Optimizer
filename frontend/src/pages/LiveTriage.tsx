@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import LayoutSidebar from '../components/LayoutSidebar';
 import { capacityRoomStyle } from '../utils/capacityRoomStyle';
-import { Filter, Mic, CircleDot, UserPlus, Search, LayoutGrid, Users } from 'lucide-react';
+import { Filter, Mic, CircleDot, UserPlus, Search, LayoutGrid, Users, Square } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
 const API = 'http://127.0.0.1:8000';
@@ -52,6 +52,10 @@ export default function LiveTriage() {
   const [overrideDiagnosis, setOverrideDiagnosis] = useState("");
   const [overrideDept, setOverrideDept] = useState("");
   const [overrideDoc, setOverrideDoc] = useState("");
+
+  const [recordingModalOpen, setRecordingModalOpen] = useState(false);
+  const [recordingActive, setRecordingActive] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
 
   const openOverrideModal = (patient: any) => {
     setOverridePatient(patient);
@@ -138,6 +142,12 @@ export default function LiveTriage() {
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    if (!recordingActive) return;
+    const id = window.setInterval(() => setRecordingSeconds((s) => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [recordingActive]);
+
   const handleAddPatient = async () => {
     if (!newName.trim() || !newComplaint.trim()) return;
 
@@ -195,6 +205,52 @@ export default function LiveTriage() {
     } catch (e) {
       console.error(e);
     }
+  };
+
+  const handleCancelEncounter = async () => {
+    try {
+      await fetch(`${API}/api/triage/cancel_encounter`, { method: 'POST' });
+      setAssessment("");
+      setPlan("");
+      setObjectiveNote("");
+      setViewMode('queue');
+      fetchData();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const formatRecTime = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+
+  const openRecordingModal = () => {
+    setRecordingSeconds(0);
+    setRecordingActive(false);
+    setRecordingModalOpen(true);
+  };
+
+  const closeRecordingModal = () => {
+    if (recordingActive && !window.confirm('Discard this recording?')) return;
+    setRecordingModalOpen(false);
+    setRecordingActive(false);
+    setRecordingSeconds(0);
+  };
+
+  const startRecording = () => {
+    setRecordingSeconds(0);
+    setRecordingActive(true);
+  };
+
+  const stopRecordingAndInsert = () => {
+    const stamp = formatRecTime(recordingSeconds);
+    const snippet = `[Dictation ${stamp}] Further history on ROS; denies recent travel; family history reviewed (simulated transcript).\n`;
+    setObjectiveNote((prev) => (prev ? `${prev.trim()}\n\n${snippet}` : snippet));
+    setRecordingActive(false);
+    setRecordingModalOpen(false);
+    setRecordingSeconds(0);
   };
 
   if (loading) {
@@ -701,12 +757,12 @@ export default function LiveTriage() {
               {/* Left Col - Patient Info */}
               <div className="card" style={{ flex: '1 1 400px', display: 'flex', flexDirection: 'column', gap: '2rem' }}>
                 <div>
-                   <button onClick={() => setViewMode('queue')} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem', padding: 0 }}>&larr; Back to Queue</button>
+                   <button type="button" onClick={handleCancelEncounter} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem', padding: 0 }}>&larr; Back to Queue</button>
                 </div>
                 
                 <div>
                    <h2 style={{ fontSize: '1.5rem', marginBottom: '0.25rem' }}>Patient Information</h2>
-                   <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Review active encounter details prior to assessment.</div>
+                   <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Review active encounter details prior to assessment. Cancel or Back to Queue discards this session and returns the patient to waiting if they were marked In Consult.</div>
                 </div>
                 
                 <div style={{ background: 'linear-gradient(135deg, var(--secondary) 0%, var(--primary) 100%)', borderRadius: '12px', padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', color: 'white', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
@@ -754,13 +810,28 @@ export default function LiveTriage() {
 
               {/* Right Col - SOAP Note Generation */}
               <div className="card" style={{ flex: '1 1 500px', display: 'flex', flexDirection: 'column' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '0.75rem' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600 }}>
                     <Mic size={20} color="var(--primary)" /> SOAP Note Generation
                   </div>
-                  <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--neutral-400)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <CircleDot size={16} color="#ba1a1a" />
-                  </div>
+                  <button
+                    type="button"
+                    onClick={openRecordingModal}
+                    className="btn-primary"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      padding: '0.5rem 1.1rem',
+                      borderRadius: '9999px',
+                      fontWeight: 700,
+                      fontSize: '0.875rem',
+                      border: 'none',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <Mic size={18} /> Record
+                  </button>
                 </div>
 
                 <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -823,7 +894,7 @@ export default function LiveTriage() {
                 </div>
 
                 <div style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--neutral-400)' }}>
-                  <button className="btn-secondary" onClick={() => setViewMode('queue')} style={{ flex: 1, background: 'var(--neutral-100)', border: '1px solid var(--neutral-400)' }}>Cancel</button>
+                  <button type="button" className="btn-secondary" onClick={handleCancelEncounter} style={{ flex: 1, background: 'var(--neutral-100)', border: '1px solid var(--neutral-400)' }}>Cancel</button>
                   <button 
                     className="btn-primary" 
                     style={{ flex: 1 }}
@@ -837,6 +908,127 @@ export default function LiveTriage() {
           )}
         </div>
       </div>
+
+      {/* SOAP dictation / recording modal */}
+      {recordingModalOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.55)',
+            zIndex: 110,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1rem',
+            backdropFilter: 'blur(4px)',
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeRecordingModal();
+          }}
+        >
+          <div
+            className="card"
+            style={{
+              width: '100%',
+              maxWidth: '440px',
+              padding: '2rem',
+              boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 style={{ fontSize: '1.35rem', fontWeight: 800, marginBottom: '0.35rem' }}>Dictation capture</h2>
+            <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
+              Simulated in-browser session for demo. Start speaking when recording is active; stop to append a draft block into the Objective field.
+            </p>
+
+            <div
+              style={{
+                borderRadius: '12px',
+                padding: '1.25rem',
+                marginBottom: '1.25rem',
+                background: recordingActive ? '#fff5f5' : 'var(--neutral-100)',
+                border: recordingActive ? '1px solid #fecaca' : '1px solid var(--neutral-400)',
+                textAlign: 'center',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                <span
+                  style={{
+                    width: 12,
+                    height: 12,
+                    borderRadius: '50%',
+                    background: recordingActive ? '#dc2626' : '#94a3b8',
+                    flexShrink: 0,
+                    boxShadow: recordingActive ? '0 0 0 4px rgba(220,38,38,0.25)' : 'none',
+                  }}
+                />
+                <span style={{ fontWeight: 800, fontSize: '0.9rem', color: recordingActive ? '#991b1b' : 'var(--text-muted)' }}>
+                  {recordingActive ? 'Recording…' : 'Ready'}
+                </span>
+              </div>
+              <div style={{ fontSize: '2rem', fontWeight: 800, fontVariantNumeric: 'tabular-nums', letterSpacing: '0.05em' }}>
+                {formatRecTime(recordingSeconds)}
+              </div>
+              {recordingActive && (
+                <div style={{ marginTop: '0.75rem', height: '36px', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: '3px' }}>
+                  {[8, 14, 10, 18, 12, 20, 9, 15, 11].map((h, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        width: 4,
+                        height: `${h}px`,
+                        borderRadius: 2,
+                        background: 'var(--primary)',
+                        opacity: 0.85,
+                        transformOrigin: 'center bottom',
+                        animation: `careflow-meter 0.9s ease-in-out ${i * 0.07}s infinite alternate`,
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <style>{`
+              @keyframes careflow-meter {
+                from { transform: scaleY(0.4); opacity: 0.45; }
+                to { transform: scaleY(1); opacity: 1; }
+              }
+            `}</style>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+              {!recordingActive ? (
+                <button type="button" className="btn-primary" style={{ padding: '0.75rem', fontWeight: 700 }} onClick={startRecording}>
+                  Start recording
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={stopRecordingAndInsert}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '0.5rem',
+                    padding: '0.75rem',
+                    fontWeight: 700,
+                    borderRadius: '10px',
+                    border: '1px solid var(--neutral-400)',
+                    background: 'white',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <Square size={16} fill="currentColor" /> Stop & append to Objective
+                </button>
+              )}
+              <button type="button" className="btn-secondary" style={{ padding: '0.65rem', fontWeight: 700 }} onClick={closeRecordingModal}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add Patient Modal */}
       {showAddModal && (

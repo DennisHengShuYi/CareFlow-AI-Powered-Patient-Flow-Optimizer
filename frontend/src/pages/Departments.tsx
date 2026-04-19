@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import LayoutSidebar from '../components/LayoutSidebar';
-import { LayoutGrid, Pencil } from 'lucide-react';
+import { LayoutGrid, Pencil, Trash2 } from 'lucide-react';
 import { capacityRoomStyle } from '../utils/capacityRoomStyle';
 
 const API = 'http://127.0.0.1:8000';
@@ -22,6 +22,14 @@ export default function Departments() {
   const [newDocName, setNewDocName] = useState('');
   const [newDocDeptId, setNewDocDeptId] = useState('');
   const [error, setError] = useState<string | null>(null);
+
+  const [editingDeptId, setEditingDeptId] = useState<string | null>(null);
+  const [deptNameDraft, setDeptNameDraft] = useState('');
+  const [editingDoctorId, setEditingDoctorId] = useState<string | null>(null);
+  const [docNameDraft, setDocNameDraft] = useState('');
+  const [docDeptDraft, setDocDeptDraft] = useState('');
+  const [editingRoomId, setEditingRoomId] = useState<string | null>(null);
+  const [roomLabelDraft, setRoomLabelDraft] = useState('');
 
   const refresh = useCallback(() => {
     return Promise.all([
@@ -125,6 +133,99 @@ export default function Departments() {
     if (!layout) return null;
     const r = layout.rooms.find((x) => x.id !== excludeRoomId && x.doctor_id === docId);
     return r?.label ?? null;
+  };
+
+  const saveDepartmentName = async (id: string) => {
+    if (!deptNameDraft.trim()) return;
+    const res = await fetch(`${API}/api/capacity/departments/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: deptNameDraft.trim() }),
+    });
+    if (!res.ok) {
+      setError(await parseApiError(res));
+      await refresh();
+      return;
+    }
+    setEditingDeptId(null);
+    setError(null);
+    await refresh();
+  };
+
+  const deleteDepartment = async (id: string, name: string) => {
+    if (!window.confirm(`Delete department "${name}" and all its rooms and doctors? This cannot be undone.`)) return;
+    const res = await fetch(`${API}/api/capacity/departments/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      setError(await parseApiError(res));
+      await refresh();
+      return;
+    }
+    if (editingDeptId === id) setEditingDeptId(null);
+    setError(null);
+    await refresh();
+  };
+
+  const saveDoctor = async (id: string) => {
+    if (!docNameDraft.trim()) {
+      setError('Doctor name cannot be empty.');
+      return;
+    }
+    const res = await fetch(`${API}/api/capacity/doctors/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: docNameDraft.trim(), department_id: docDeptDraft }),
+    });
+    if (!res.ok) {
+      setError(await parseApiError(res));
+      await refresh();
+      return;
+    }
+    setEditingDoctorId(null);
+    setError(null);
+    await refresh();
+  };
+
+  const deleteDoctor = async (id: string, name: string) => {
+    if (!window.confirm(`Remove ${name}? Patients in triage assigned to this clinician will become Unassigned.`)) return;
+    const res = await fetch(`${API}/api/capacity/doctors/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      setError(await parseApiError(res));
+      await refresh();
+      return;
+    }
+    if (editingDoctorId === id) setEditingDoctorId(null);
+    setError(null);
+    await refresh();
+  };
+
+  const saveRoomLabel = async (id: string) => {
+    if (!roomLabelDraft.trim()) return;
+    const res = await fetch(`${API}/api/capacity/rooms/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label: roomLabelDraft.trim() }),
+    });
+    if (!res.ok) {
+      setError(await parseApiError(res));
+      await refresh();
+      return;
+    }
+    setEditingRoomId(null);
+    setError(null);
+    await refresh();
+  };
+
+  const deleteRoom = async (id: string, label: string) => {
+    if (!window.confirm(`Delete ${label}?`)) return;
+    const res = await fetch(`${API}/api/capacity/rooms/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      setError(await parseApiError(res));
+      await refresh();
+      return;
+    }
+    if (editingRoomId === id) setEditingRoomId(null);
+    setError(null);
+    await refresh();
   };
 
   return (
@@ -260,16 +361,130 @@ export default function Departments() {
 
             {layout.departments.map((dept) => (
               <section key={dept.id} className="card" style={{ padding: '1.5rem' }}>
-                <h3 style={{ fontSize: '1.1rem', fontWeight: 800, marginBottom: '0.25rem' }}>{dept.name}</h3>
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1.25rem' }}>Rooms and doctors listed for this department.</p>
+                <div
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '0.75rem',
+                    marginBottom: '0.75rem',
+                  }}
+                >
+                  {editingDeptId === dept.id ? (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center', flex: 1 }}>
+                      <input
+                        value={deptNameDraft}
+                        onChange={(e) => setDeptNameDraft(e.target.value)}
+                        style={{ flex: '1 1 200px', padding: '0.5rem 0.75rem', borderRadius: '8px', border: '1px solid var(--neutral-400)', fontWeight: 700 }}
+                      />
+                      <button type="button" className="btn-primary" style={{ padding: '0.45rem 1rem', fontWeight: 700 }} onClick={() => saveDepartmentName(dept.id)}>
+                        Save
+                      </button>
+                      <button type="button" style={{ padding: '0.45rem 1rem', fontWeight: 600 }} onClick={() => setEditingDeptId(null)}>
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <h3 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0 }}>{dept.name}</h3>
+                      <div style={{ display: 'flex', gap: '0.35rem' }}>
+                        <button
+                          type="button"
+                          title="Rename department"
+                          onClick={() => {
+                            setEditingDeptId(dept.id);
+                            setDeptNameDraft(dept.name);
+                          }}
+                          style={{ padding: '0.45rem', borderRadius: '8px', border: '1px solid var(--neutral-400)', background: 'white', cursor: 'pointer' }}
+                        >
+                          <Pencil size={16} />
+                        </button>
+                        <button
+                          type="button"
+                          title="Delete department"
+                          onClick={() => deleteDepartment(dept.id, dept.name)}
+                          style={{ padding: '0.45rem', borderRadius: '8px', border: '1px solid #fecaca', background: '#fff5f5', color: '#b91c1c', cursor: 'pointer' }}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
+                  Rename updates triage patients on this department. Delete is blocked while any patient still references the department.
+                </p>
 
                 <h4 style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Doctors</h4>
-                <ul style={{ margin: '0 0 1rem 1rem', fontSize: '0.9rem' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem' }}>
                   {doctorsInDept(dept.id).map((doc) => (
-                    <li key={doc.id}>{doc.name}</li>
+                    <div
+                      key={doc.id}
+                      style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        padding: '0.35rem 0',
+                        borderBottom: '1px solid var(--neutral-200)',
+                      }}
+                    >
+                      {editingDoctorId === doc.id ? (
+                        <>
+                          <input
+                            value={docNameDraft}
+                            onChange={(e) => setDocNameDraft(e.target.value)}
+                            placeholder="Name"
+                            style={{ flex: '1 1 160px', padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid var(--neutral-400)' }}
+                          />
+                          <select
+                            value={docDeptDraft}
+                            onChange={(e) => setDocDeptDraft(e.target.value)}
+                            style={{ padding: '0.45rem', borderRadius: '6px', border: '1px solid var(--neutral-400)' }}
+                          >
+                            {layout.departments.map((d) => (
+                              <option key={d.id} value={d.id}>
+                                {d.name}
+                              </option>
+                            ))}
+                          </select>
+                          <button type="button" className="btn-primary" style={{ padding: '0.4rem 0.85rem', fontWeight: 700 }} onClick={() => saveDoctor(doc.id)}>
+                            Save
+                          </button>
+                          <button type="button" style={{ padding: '0.4rem 0.85rem', fontWeight: 600 }} onClick={() => setEditingDoctorId(null)}>
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <span style={{ flex: '1 1 140px', fontWeight: 600, fontSize: '0.9rem' }}>{doc.name}</span>
+                          <button
+                            type="button"
+                            title="Edit doctor"
+                            onClick={() => {
+                              setEditingDoctorId(doc.id);
+                              setDocNameDraft(doc.name);
+                              setDocDeptDraft(doc.department_id);
+                            }}
+                            style={{ padding: '0.35rem', borderRadius: '6px', border: '1px solid var(--neutral-400)', background: 'white', cursor: 'pointer' }}
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            title="Remove doctor"
+                            onClick={() => deleteDoctor(doc.id, doc.name)}
+                            style={{ padding: '0.35rem', borderRadius: '6px', border: '1px solid #fecaca', background: '#fff5f5', color: '#b91c1c', cursor: 'pointer' }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </>
+                      )}
+                    </div>
                   ))}
-                  {doctorsInDept(dept.id).length === 0 && <li style={{ color: 'var(--text-muted)' }}>No doctors yet</li>}
-                </ul>
+                  {doctorsInDept(dept.id).length === 0 && <div style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>No doctors yet</div>}
+                </div>
 
                 <h4 style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Rooms & assignment</h4>
                 <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.75rem', maxWidth: '720px' }}>
@@ -280,8 +495,8 @@ export default function Departments() {
                     <div
                       key={room.id}
                       style={{
-                        display: 'flex',
-                        flexWrap: 'wrap',
+                        display: 'grid',
+                        gridTemplateColumns: 'auto minmax(240px, 280px) auto',
                         gap: '0.75rem',
                         alignItems: 'center',
                         padding: '0.65rem 0.85rem',
@@ -290,23 +505,83 @@ export default function Departments() {
                         border: '1px solid var(--neutral-400)',
                       }}
                     >
-                      <span style={{ fontWeight: 700, minWidth: '88px' }}>{room.label}</span>
-                      <select
-                        value={room.doctor_id || ''}
-                        onChange={(e) => assignDoctorToRoom(room.id, e.target.value)}
-                        style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid var(--neutral-400)', fontSize: '0.85rem', minWidth: '200px' }}
+                      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
+                        {editingRoomId === room.id ? (
+                          <>
+                            <input
+                              value={roomLabelDraft}
+                              onChange={(e) => setRoomLabelDraft(e.target.value)}
+                              style={{ width: 120, padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid var(--neutral-400)', fontWeight: 700 }}
+                            />
+                            <button type="button" className="btn-primary" style={{ padding: '0.4rem 0.85rem', fontWeight: 700 }} onClick={() => saveRoomLabel(room.id)}>
+                              Save
+                            </button>
+                            <button type="button" style={{ padding: '0.4rem 0.85rem', fontWeight: 600 }} onClick={() => setEditingRoomId(null)}>
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <span style={{ fontWeight: 700, minWidth: '72px' }}>{room.label}</span>
+                            <button
+                              type="button"
+                              title="Rename room"
+                              onClick={() => {
+                                setEditingRoomId(room.id);
+                                setRoomLabelDraft(room.label);
+                              }}
+                              style={{ padding: '0.35rem', borderRadius: '6px', border: '1px solid var(--neutral-400)', background: 'white', cursor: 'pointer' }}
+                            >
+                              <Pencil size={14} />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                      <div style={{ minWidth: 0, width: '100%' }}>
+                        <select
+                          value={room.doctor_id || ''}
+                          onChange={(e) => assignDoctorToRoom(room.id, e.target.value)}
+                          style={{
+                            width: '100%',
+                            maxWidth: '100%',
+                            boxSizing: 'border-box',
+                            padding: '0.45rem 0.65rem',
+                            borderRadius: '6px',
+                            border: '1px solid var(--neutral-400)',
+                            fontSize: '0.85rem',
+                            background: 'white',
+                            outline: 'none',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <option value="">No clinician</option>
+                          {doctorsInDept(dept.id).map((doc) => {
+                            const fromRoom = otherRoomLabelForDoctor(doc.id, room.id);
+                            return (
+                              <option key={doc.id} value={doc.id}>
+                                {doc.name}
+                                {fromRoom ? ` (moves from ${fromRoom})` : ''}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+                      <button
+                        type="button"
+                        title="Delete room"
+                        onClick={() => deleteRoom(room.id, room.label)}
+                        style={{
+                          padding: '0.35rem',
+                          borderRadius: '6px',
+                          border: '1px solid #fecaca',
+                          background: '#fff5f5',
+                          color: '#b91c1c',
+                          cursor: 'pointer',
+                          justifySelf: 'end',
+                        }}
                       >
-                        <option value="">No clinician</option>
-                        {doctorsInDept(dept.id).map((doc) => {
-                          const fromRoom = otherRoomLabelForDoctor(doc.id, room.id);
-                          return (
-                            <option key={doc.id} value={doc.id}>
-                              {doc.name}
-                              {fromRoom ? ` (moves from ${fromRoom})` : ''}
-                            </option>
-                          );
-                        })}
-                      </select>
+                        <Trash2 size={14} />
+                      </button>
                     </div>
                   ))}
                   {roomsInDept(dept.id).length === 0 && <div style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>No rooms yet — add one below.</div>}

@@ -242,6 +242,45 @@ def add_department(body: NewDepartmentBody):
     return {"id": nid, "layout": capacity_state}
 
 
+class UpdateDepartmentBody(BaseModel):
+    name: str
+
+
+@app.put("/api/capacity/departments/{department_id}")
+def update_department(department_id: str, body: UpdateDepartmentBody):
+    d = _dept_by_id(department_id)
+    if not d:
+        raise HTTPException(status_code=404, detail="Department not found")
+    new_name = body.name.strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="Name is required")
+    old_name = d["name"]
+    d["name"] = new_name
+    if old_name != new_name:
+        for p in triage_state["patients"]:
+            if p.get("department") == old_name:
+                p["department"] = new_name
+    return {"layout": capacity_state}
+
+
+@app.delete("/api/capacity/departments/{department_id}")
+def delete_department(department_id: str):
+    d = _dept_by_id(department_id)
+    if not d:
+        raise HTTPException(status_code=404, detail="Department not found")
+    dept_name = d["name"]
+    pc = sum(1 for p in triage_state["patients"] if p.get("department") == dept_name)
+    if pc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{pc} patient(s) still assigned to this department in triage. Reassign them first.",
+        )
+    capacity_state["rooms"] = [r for r in capacity_state["rooms"] if r["department_id"] != department_id]
+    capacity_state["doctors"] = [x for x in capacity_state["doctors"] if x["department_id"] != department_id]
+    capacity_state["departments"] = [x for x in capacity_state["departments"] if x["id"] != department_id]
+    return {"layout": capacity_state}
+
+
 class NewRoomBody(BaseModel):
     label: str
 
@@ -255,6 +294,31 @@ def add_room(department_id: str, body: NewRoomBody):
         {"id": rid, "department_id": department_id, "label": body.label.strip(), "doctor_id": None}
     )
     return {"id": rid, "layout": capacity_state}
+
+
+class UpdateRoomBody(BaseModel):
+    label: str
+
+
+@app.put("/api/capacity/rooms/{room_id}")
+def update_room(room_id: str, body: UpdateRoomBody):
+    room = next((r for r in capacity_state["rooms"] if r["id"] == room_id), None)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    lab = body.label.strip()
+    if not lab:
+        raise HTTPException(status_code=400, detail="Label is required")
+    room["label"] = lab
+    return {"layout": capacity_state}
+
+
+@app.delete("/api/capacity/rooms/{room_id}")
+def delete_room(room_id: str):
+    room = next((r for r in capacity_state["rooms"] if r["id"] == room_id), None)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    capacity_state["rooms"] = [r for r in capacity_state["rooms"] if r["id"] != room_id]
+    return {"layout": capacity_state}
 
 
 class NewDoctorBody(BaseModel):
@@ -271,6 +335,55 @@ def add_doctor(body: NewDoctorBody):
         {"id": did, "name": body.name.strip(), "department_id": body.department_id}
     )
     return {"id": did, "layout": capacity_state}
+
+
+class UpdateDoctorBody(BaseModel):
+    name: str | None = None
+    department_id: str | None = None
+
+
+@app.put("/api/capacity/doctors/{doctor_id}")
+def update_doctor(doctor_id: str, body: UpdateDoctorBody):
+    doc = _doctor_by_id(doctor_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+    has_name = body.name is not None and body.name.strip() != ""
+    has_dept = body.department_id is not None and body.department_id != ""
+    if not has_name and not has_dept:
+        raise HTTPException(status_code=400, detail="Provide a new name and/or department")
+    old_name = doc["name"]
+    if has_name:
+        doc["name"] = body.name.strip()
+    if has_dept:
+        if not _dept_by_id(body.department_id):
+            raise HTTPException(status_code=400, detail="Department not found")
+        new_dept = body.department_id
+        for r in capacity_state["rooms"]:
+            if r.get("doctor_id") == doctor_id and r["department_id"] != new_dept:
+                r["doctor_id"] = None
+        doc["department_id"] = new_dept
+    new_name = doc["name"]
+    if old_name != new_name:
+        for p in triage_state["patients"]:
+            if p.get("assigned_doctor") == old_name:
+                p["assigned_doctor"] = new_name
+    return {"layout": capacity_state}
+
+
+@app.delete("/api/capacity/doctors/{doctor_id}")
+def delete_doctor(doctor_id: str):
+    doc = _doctor_by_id(doctor_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+    name = doc["name"]
+    for r in capacity_state["rooms"]:
+        if r.get("doctor_id") == doctor_id:
+            r["doctor_id"] = None
+    capacity_state["doctors"] = [x for x in capacity_state["doctors"] if x["id"] != doctor_id]
+    for p in triage_state["patients"]:
+        if p.get("assigned_doctor") == name:
+            p["assigned_doctor"] = "Unassigned"
+    return {"layout": capacity_state}
 
 
 class AssignRoomBody(BaseModel):
@@ -372,6 +485,34 @@ def set_active_encounter(req: SetEncounterRequest):
         patient["status_color"] = "neutral"
         return {"status": "success"}
     return {"error": "Patient not found"}
+
+
+@app.post("/api/triage/cancel_encounter")
+def cancel_encounter():
+    """Leave charting without signing: revert In Consult so accidental opens do not strand the patient."""
+    active_id = triage_state.get("active_encounter", {}).get("id") or ""
+    if active_id:
+        patient = next((p for p in triage_state["patients"] if p["id"] == active_id), None)
+        if patient and patient.get("status") == "In Consult":
+            if patient.get("department") == "Triage Queue":
+                patient["status"] = "Waiting Room"
+            else:
+                patient["status"] = "Waiting for Doctor"
+            patient["status_color"] = "neutral"
+    triage_state["active_encounter"] = {
+        "id": "",
+        "initials": "-",
+        "name": "No Active Encounter",
+        "details": "Select a patient from the queue.",
+    }
+    triage_state["ai_scribe"] = {
+        "status": "Waiting for next encounter...",
+        "subjective": "N/A",
+        "vitals": {"bp": "-", "hr": "-", "o2": "-"},
+        "assessment_plan": "",
+    }
+    return {"status": "success"}
+
 
 class SignNoteRequest(BaseModel):
     assessment_plan: str
