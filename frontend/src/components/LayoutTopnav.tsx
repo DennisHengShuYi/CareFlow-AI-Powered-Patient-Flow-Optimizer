@@ -20,7 +20,7 @@ export default function LayoutTopnav({ children, pageType = 'default' }: { child
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <div style={{ width: '32px', height: '32px', borderRadius: '10px', background: 'var(--primary)', color: 'white', display: 'flex', justifyContent: 'center', alignItems: 'center', fontWeight: 'bold' }}>+</div>
-          <Link to="/landing"><h2 style={{ fontSize: '1.25rem', color: 'var(--secondary)' }}>MediRoute</h2></Link>
+          <Link to="/landing"><h2 style={{ fontSize: '1.25rem', color: 'var(--secondary)' }}>CareFlow</h2></Link>
         </div>
 
         {pageType === 'default' && (
