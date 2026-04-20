@@ -4,6 +4,9 @@ from sqlalchemy import text
 
 async def sync():
     async with engine.begin() as conn:
+        print("Enabling pgvector extension...")
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+        
         print("Syncing schema...")
         # Create tables if not exist
         await conn.run_sync(Base.metadata.create_all)

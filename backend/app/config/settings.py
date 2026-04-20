@@ -24,7 +24,12 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     ZHIPU_API_KEY: str = ""
     MODEL_NAME: str = "gemini-2.5-flash-lite"
-    EMBEDDING_DIMENSIONS: int = 1536
+    
+    # Embedding Configuration (Decoupled from LLM Provider)
+    EMBEDDING_PROVIDER: str = "huggingface"
+    EMBEDDING_MODEL: str = "BAAI/bge-m3"
+    EMBEDDING_DIMENSIONS: int = 1024
+    HUGGINGFACE_API_KEY: str = ""
 
     # Upstash Redis
     UPSTASH_REDIS_REST_URL: str

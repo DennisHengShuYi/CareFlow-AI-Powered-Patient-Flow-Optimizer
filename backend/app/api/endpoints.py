@@ -6,6 +6,7 @@ Audit: every non-health request logs to audit_logs (SHA-256 only, no PII).
 import hashlib
 import json
 import math
+import re
 import time
 import uuid
 
@@ -214,9 +215,17 @@ async def intake_text(
             )
 
         # 4. Triage agent
-        print("DEBUG: [Stage 3] Calling Triage Agent...")
+        print("DEBUG: [Stage 3] Calling Triage Agent with system-wide departmental constraints...")
+        
+        # Fetch all unique live department names across the entire system
+        live_depts = []
+        async with AsyncSessionLocal() as db:
+            dept_stmt = select(Department.name).distinct()
+            dept_res = await db.execute(dept_stmt)
+            live_depts = [row[0] for row in dept_res.all()]
+        
         result = await triage_agent.analyze(
-            raw, session_id, history
+            raw, session_id, history, available_departments=live_depts
         )
 
         # 5. Ambiguity loop decision
@@ -229,10 +238,13 @@ async def intake_text(
 
         # 6. Append turns to Redis
         print("DEBUG: [Stage 4] Persisting to Redis...")
+        lang = result.get("language_detected", "en")
+        complete_msg = "Triage selesai" if lang == "ms" else "Triage complete"
+        
         await redis_client.append_turn(session_id, {"role": "user", "content": raw})
         await redis_client.append_turn(
             session_id,
-            {"role": "agent", "content": follow_up_q or "Triage complete"},
+            {"role": "agent", "content": follow_up_q or complete_msg},
         )
 
         # 7. Persist session to DB
@@ -251,7 +263,7 @@ async def intake_text(
             turn_number=(turn_count // 2) + 1,  # e.g. turn_count is 0 -> 1st turn, 2 -> 2nd turn
             user_prompt=raw,
             triage_result=result,
-            ai_reply=follow_up_q or "Triage complete",
+            ai_reply=follow_up_q or complete_msg,
             input_channel=body.get("modality", "text")  # If frontend sends modality
         )
 
@@ -412,12 +424,17 @@ async def recommend_hospitals(
     Rank hospitals by distance (close to far) and STRICTLY filter by department match.
     """
     # 1. Fetch ALL active hospitals with their departments
+    print(f"DEBUG: Recommendation request for specialist: '{body.specialist}'")
     hospitals = await supabase_rest.query_table("hospitals", {
         "select": "*,departments(id,name,specialty_code)",
         "is_active": "eq.true"
     })
+    
     if not hospitals:
+        print("DEBUG: No active hospitals found in database.")
         return {"recommendations": []}
+    
+    print(f"DEBUG: Found {len(hospitals)} raw hospitals in DB.")
 
     # 2. Get User Coordinates (from profile or location lookup)
     uid = user_id.get("sub") if isinstance(user_id, dict) else user_id
@@ -460,23 +477,36 @@ async def recommend_hospitals(
         departments = h.get("departments", []) or []
         matched_depts: list[str] = []
 
-        # STRICT FILTER: Check if any department matches the specialist
-        # specialist = e.g. "General Practice" or "Pediatrics"
+        # specialist = e.g. "Klinik Am (General Medicine)."
+        # 1. Extract technical name if parentheses exist (anywhere in string)
+        search_term = specialist_lower.strip()
+        match = re.search(r"\(([^)]+)\)", specialist_lower)
+        if match:
+            search_term = match.group(1).strip()
+        
+        # Cleanup search term (remove trailing punctuation often added by LLMs)
+        search_term = search_term.strip(" .")
+
         for dept in departments:
-            name = dept.get("name", "").lower()
-            code = (dept.get("specialty_code") or "").lower()
+            name = dept.get("name", "").lower().strip()
+            code = (dept.get("specialty_code") or "").lower().strip()
 
             # Flexible but targeted matching
-            # e.g. "Pediatrics" matches "Pediatrics", "Pediatric Department", etc.
-            if specialist_lower and (
-                specialist_lower in name 
-                or name in specialist_lower
-                or (code and specialist_lower in code)
+            # Priority 1: Exact match on technical name inside parentheses
+            # Priority 2: Substring matches
+            if search_term and (
+                search_term == name 
+                or name == search_term
+                or search_term in name 
+                or (code and search_term in code)
             ):
                 matched_depts.append(dept.get("name", ""))
 
         if not matched_depts:
+            print(f"DEBUG: Hospital '{h.get('name')}' did NOT match specialist '{body.specialist}' (search_term: '{search_term}')")
             return None # FILTERED OUT
+
+        print(f"DEBUG: Hospital '{h.get('name')}' MATCHED! ({matched_depts})")
 
         # DISTANCE CALCULATION
         dist_km = None
