@@ -79,28 +79,42 @@ class IntakePipeline:
         """
         raw_text = ""
 
-        if mime_type == "application/pdf":
-            import pdfplumber
-            with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-                for page in pdf.pages:
-                    t = page.extract_text()
-                    if t:
-                        raw_text += t + "\n"
-        elif mime_type.startswith("image/"):
-            from PIL import Image
-            import pytesseract
-            image = Image.open(io.BytesIO(file_bytes))
-            # eng+msa covers English and Bahasa Malaysia tessdata packs
-            raw_text = pytesseract.image_to_string(image, lang="eng+msa")
-        else:
-            raise ValueError(f"Unsupported document MIME type: {mime_type}")
+        try:
+            if mime_type == "application/pdf":
+                import pdfplumber
+                with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+                    for page in pdf.pages:
+                        t = page.extract_text()
+                        if t:
+                            raw_text += t + "\n"
+            elif mime_type.startswith("image/"):
+                from PIL import Image
+                import pytesseract
+                image = Image.open(io.BytesIO(file_bytes))
+                try:
+                    raw_text = pytesseract.image_to_string(image, lang="eng+msa")
+                except Exception as e:
+                    print(f"DEBUG: Tesseract not found or failed: {e}")
+                    raise ValueError("Image OCR engine (Tesseract) is not installed on this system. Please upload a searchable PDF.")
+            else:
+                raise ValueError(f"Unsupported document MIME type: {mime_type}")
+        except Exception as e:
+            print(f"DEBUG: Document processing failed: {e}")
+            if isinstance(e, ValueError): raise e
+            raise ValueError(f"Failed to extract text from document: {str(e)}")
 
-        # LLM correction pass — fixes OCR noise while preserving bilingual text
+        if not raw_text.strip():
+            print("DEBUG: Document contains no extractable text (likely scanned image).")
+            raise ValueError("This document appears to be a scanned image or contains no readable text. Please upload a searchable version or type the notes manually.")
+
+        # LLM identification and correction pass
         correction_system = (
-            "You are a medical OCR correction assistant. "
-            "Fix any scanning artefacts, garbled characters, or broken line-breaks in the text below. "
-            "Preserve all Bahasa Malaysia and English content exactly. "
-            "Output ONLY the corrected text — no commentary."
+            "You are a medical document specialist. "
+            "1. IDENTIFY: Determine if this is a Lab Report, Prescription, Doctor's Note, or General Document. "
+            "2. CLEAN: Fix scanning artefacts, typos, and broken lines. "
+            "3. FORMAT: Prepend the identification as [DOC_TYPE: TYPE]. "
+            "Preserve all Bahasa Malaysia and English content. "
+            "Output ONLY the [DOC_TYPE] header followed by the cleaned clinical text."
         )
         try:
             corrected = await llm.generate(raw_text[:4000], correction_system, response_format="text")
@@ -115,6 +129,7 @@ class IntakePipeline:
             detected_language=lang,
             metadata={"original_length": len(raw_text), "mime_type": mime_type},
         )
+
 
 
 intake_pipeline = IntakePipeline()

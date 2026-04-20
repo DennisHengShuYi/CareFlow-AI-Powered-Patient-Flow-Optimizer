@@ -1,8 +1,10 @@
 from typing import List, Dict
 from sqlalchemy import select
 from app.models.db import AsyncSessionLocal, MedicalKBEmbedding
+from app.config.settings import settings
 from app.config.llm_provider import llm
 from app.services.agents.clinical_agents import ExtractorAgent, StrategistAgent, CriticAgent
+
 
 class TriageOrchestrator:
     """The Multi-Agent Orchestrator (Sparse Context Pattern)"""
@@ -60,6 +62,7 @@ class TriageOrchestrator:
 
         # Phase 4: Live Verification (Existence Check)
         # ----------------------------------------------------
+        live_depts = None
         async with AsyncSessionLocal() as db:
             # Check if this specialist (or similar) exists in ANY hospital
             stmt = sa_text("SELECT COUNT(*) FROM departments WHERE name ILIKE :name")
@@ -91,52 +94,56 @@ class TriageOrchestrator:
             else:
                 print(f"DEBUG: [Stage 4] Live Match Confirmed ({count} facilities found).")
 
-
         # Phase 5 & 6: Adversarial Consensus Debate (Gemini vs. Groq)
         # ----------------------------------------------------
-        MAX_DEBATE_ROUNDS = 2
+        MAX_DEBATE_ROUNDS = 3
         debate_history = ""
         round_count = 0
         final_audit = None
+
         is_re_audited = False
+        language = extraction.get("language", "en")
 
         while round_count < MAX_DEBATE_ROUNDS:
             round_count += 1
-            print(f"DEBUG: [Consensus Round {round_count}] Auditing Strategist...")
+            print(f"\n[TURN {round_count}: AUDIT] Agent: Auditor (Critic), Model: {settings.AGENT_CRITIC_MODEL}")
             
-            audit = await CriticAgent.process(symptoms, decision, clinical_context=clinical_context)
+            audit = await CriticAgent.process(symptoms, decision, clinical_context=clinical_context, language=language)
             final_audit = audit
             
+            print(f"DEBUG: [Auditor Reasoning]\n{audit.get('critique')}")
+
             if audit.get("status") == "PASSED":
-                print(f"DEBUG: [Consensus Round {round_count}] PASSED: Decision validated.")
+                print(f"DEBUG: [Consensus] PASSED: Auditor validated the decision.")
                 break
             
             # If rejected, Gemini (Strategist) gets a chance to rebut/concede
             critique = audit.get("critique", "Inconsistent logic")
             debate_history += f"Round {round_count} Auditor Critique: {critique}\n"
             
-            print(f"DEBUG: [Consensus Round {round_count}] REJECTED: {critique}")
-            print(f"DEBUG: [Consensus Round {round_count}] Strategist attempting rebuttal/concession...")
+            print(f"\n[TURN {round_count}: REBUTTAL] Agent: Strategist, Model: {settings.AGENT_STRATEGIST_MODEL}")
             
             decision = await StrategistAgent.process(
                 extraction, 
                 clinical_context, 
-                valid_departments=live_depts if count == 0 else None, 
-                is_fallback_mode=(count == 0),
+                valid_departments=live_depts, 
+                is_fallback_mode=(live_depts is not None),
                 debate_history=debate_history
             )
             is_re_audited = True
-            print(f"DEBUG: [Consensus Round {round_count}] Strategist Counter-Proposal: {decision.get('urgency')} {decision.get('specialist')}")
+            print(f"DEBUG: [Strategist Reasoning]\n{decision.get('reasoning')}")
+            print(f"DEBUG: [Consensus Round {round_count}] Strategist Result -> {decision.get('urgency')} {decision.get('specialist')}")
 
-        # Final Tie-Breaker (If still rejected after Max Rounds, Grounder Wins)
+        # Final Tie-Breaker
         if final_audit and final_audit.get("status") == "REJECTED":
-            print("DEBUG: [Consensus] Limit reached. Final Auditor (Grounder) breaks the tie.")
+            print(f"\n[FINAL TIE-BREAKER] Decided by Auditor ({settings.AGENT_CRITIC_MODEL})")
             revised = final_audit.get("revised_decision")
             if revised:
-                print(f"DEBUG: [Consensus] Adopting Auditor's Final Word: {revised.get('urgency')} {revised.get('specialist')}")
                 decision = revised
         
-        print(f"DEBUG: [Final Result] Urgency: {decision.get('urgency')}, Specialist: {decision.get('specialist')}")
+        print(f"\n[TRIAGE COMPLETE] Final Outcome: {decision.get('urgency')} {decision.get('specialist')}")
+
+
 
         return {
             "is_validated": final_audit.get("status") == "PASSED" or is_re_audited,

@@ -367,15 +367,21 @@ async def intake_document(
     print(f"DEBUG: [Doc] Processing document: {file.filename} (MIME: {mime}, {len(contents)} bytes)")
     try:
         result = await intake_pipeline.process_document(contents, mime)
-        print(f"DEBUG: [Doc] Extraction successful: {result.extracted[:100]}...")
+        print(f"DEBUG: [Doc] Extraction successful: {result.extracted if hasattr(result, 'extracted') else 'Content extracted'}")
         latency = int((time.time() - t0) * 1000)
         await _audit("doc", "/intake/document", file.filename or "document", latency, 200)
         return result.model_dump()
+    except ValueError as val_err:
+        print(f"DEBUG: [Doc] Validation failed: {val_err}")
+        latency = int((time.time() - t0) * 1000)
+        await _audit("doc", "/intake/document", file.filename or "document", latency, 400, str(val_err))
+        raise HTTPException(status_code=400, detail=str(val_err))
     except Exception as exc:
         print(f"DEBUG: [Doc] Processing failed: {exc}")
         latency = int((time.time() - t0) * 1000)
         await _audit("doc", "/intake/document", file.filename or "document", latency, 500, str(exc))
         raise HTTPException(status_code=500, detail=str(exc))
+
 
 
 

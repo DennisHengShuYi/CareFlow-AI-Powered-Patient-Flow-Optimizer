@@ -72,7 +72,10 @@ export default function Intake() {
     setIsFollowingUp(false);
     setInputMode('text');
     setRecommendations([]);
+    setAttachedDocContent(null);
+    setAttachedDocName(null);
   };
+
 
   const [loadingStatus, setLoadingStatus] = useState<string>('');
 
@@ -159,19 +162,25 @@ export default function Intake() {
           headers: { 'Authorization': `Bearer ${token}` },
           body: formData
       });
-      if (!docRes.ok) throw new Error('File upload failed');
+      
+      if (!docRes.ok) {
+        const errorData = await docRes.json().catch(() => ({ detail: 'Upload failed' }));
+        throw new Error(errorData.detail || 'File upload failed');
+      }
+      
       const docData = await docRes.json();
       
       setAttachedDocContent(docData.content || docData.extracted || "");
       setAttachedDocName(fileName);
       setInputMode('text');
       
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('Failed to upload or process document.');
+      alert(`Document Error: ${err.message}`);
     } finally {
       setLoading(false);
     }
+
   };
 
   const startListening = () => {
@@ -360,13 +369,14 @@ export default function Intake() {
                 />
                 <button
                   onClick={handleTextSubmit}
-                  disabled={loading || !textInput.trim()}
+                  disabled={loading || (!textInput.trim() && !attachedDocContent)}
                   className="btn-primary"
                   style={{ alignSelf: 'flex-end', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
                 >
                   {loading ? <Loader2 size={16} className="animate-spin" /> : <ArrowRight size={16} />}
                   {loading ? ' ' + loadingStatus : 'Analyze Symptoms'}
                 </button>
+
               </div>
             )}
 
