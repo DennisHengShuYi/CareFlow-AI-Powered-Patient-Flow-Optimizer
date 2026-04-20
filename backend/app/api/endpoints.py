@@ -499,6 +499,14 @@ class HospitalRecommendRequest(BaseModel):
     chief_complaint: str = ""     # From triage.chief_complaint
     location: str = ""            # From user profile.location (e.g. "Miri, Sarawak")
 
+
+class NearbyFacilityRequest(BaseModel):
+    location: str = ""
+    latitude: float | None = None
+    longitude: float | None = None
+    specialist: str = ""
+    limit: int = 12
+
 @router.post("/api/hospitals/recommend")
 async def recommend_hospitals(
     body: HospitalRecommendRequest,
@@ -606,6 +614,106 @@ async def recommend_hospitals(
     candidates.sort(key=lambda x: (x["distance_km"] if x["distance_km"] is not None else 999999))
 
     return {"recommendations": candidates[:5]}
+
+
+@router.post("/api/hospitals/nearby")
+async def nearby_facilities(
+    body: NearbyFacilityRequest,
+    user_id: str = Depends(verify_clerk_token)
+):
+    """Return nearby healthcare facilities for the patient map and booking flow."""
+    hospitals = await supabase_rest.query_table("hospitals", {
+        "select": "*,departments(id,name,specialty_code)",
+        "is_active": "eq.true"
+    })
+    if not hospitals:
+        return {"facilities": []}
+
+    uid = user_id.get("sub") if isinstance(user_id, dict) else user_id
+    profile = await supabase_rest.get_profile(uid)
+
+    user_lat = body.latitude or (profile.get("latitude") if profile else None)
+    user_lng = body.longitude or (profile.get("longitude") if profile else None)
+
+    if (not user_lat or not user_lng):
+        user_loc = (profile.get("location") if profile else None) or body.location
+        if user_loc:
+            loc_map = {
+                "miri": (4.3995, 113.9914),
+                "kl": (3.1390, 101.6869),
+                "kuala lumpur": (3.1390, 101.6869),
+                "pj": (3.1073, 101.6067),
+                "petaling jaya": (3.1073, 101.6067),
+                "cyberjaya": (2.9213, 101.6511),
+            }
+            loc_lower = user_loc.lower()
+            for city, coords in loc_map.items():
+                if city in loc_lower:
+                    user_lat, user_lng = coords
+                    break
+
+    specialist_lower = body.specialist.lower().strip()
+
+    def _calculate_haversine(lat1, lon1, lat2, lon2):
+        R = 6371.0
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        a = (math.sin(dlat / 2) ** 2 +
+             math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2)
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        return R * c
+
+    def _facility_type(name: str) -> str:
+        lower = name.lower()
+        if "clinic" in lower:
+            return "clinic"
+        if "hospital" in lower:
+            return "hospital"
+        return "healthcare"
+
+    facilities: list[dict] = []
+    for hospital in hospitals:
+        departments = hospital.get("departments", []) or []
+        matched_depts: list[str] = []
+
+        for dept in departments:
+            dept_name = dept.get("name", "")
+            dept_lower = dept_name.lower()
+            code = (dept.get("specialty_code") or "").lower()
+
+            if specialist_lower:
+                if specialist_lower in dept_lower or dept_lower in specialist_lower or (code and specialist_lower in code):
+                    matched_depts.append(dept_name)
+            else:
+                matched_depts.append(dept_name)
+
+        if specialist_lower and not matched_depts:
+            continue
+
+        h_lat = hospital.get("latitude")
+        h_lng = hospital.get("longitude")
+        dist_km = None
+        if user_lat is not None and user_lng is not None and h_lat is not None and h_lng is not None:
+            dist_km = _calculate_haversine(user_lat, user_lng, h_lat, h_lng)
+
+        name = hospital.get("name", "Unknown")
+        facilities.append({
+            "id": str(hospital["id"]),
+            "name": name,
+            "address": hospital.get("address") or "Address not available",
+            "contact_number": hospital.get("contact_number") or "",
+            "latitude": h_lat,
+            "longitude": h_lng,
+            "facility_type": _facility_type(name),
+            "specialty_match": bool(matched_depts),
+            "matched_departments": matched_depts,
+            "all_departments": [d.get("name", "") for d in departments],
+            "distance_km": dist_km,
+            "distance_note": f"{round(dist_km, 1)} km away" if dist_km is not None else "Distance unknown",
+        })
+
+    facilities.sort(key=lambda item: (item["distance_km"] if item["distance_km"] is not None else 999999))
+    return {"facilities": facilities[: max(1, min(body.limit, 20))]}
 
 
 async def _get_hospital_id(user_id: str):

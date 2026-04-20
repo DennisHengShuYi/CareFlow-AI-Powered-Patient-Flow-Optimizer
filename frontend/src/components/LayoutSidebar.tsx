@@ -1,18 +1,19 @@
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, FileText, Building, Calendar } from 'lucide-react';
-import { SignedIn, SignedOut, UserButton, useClerk } from '@clerk/clerk-react';
+import { LayoutDashboard, Users, FileText, Building, Calendar, Map } from 'lucide-react';
+import { SignedIn, SignedOut, UserButton } from '@clerk/clerk-react';
 import { useProfile } from '../hooks/useProfile';
 import { ShieldCheck } from 'lucide-react';
 
 export default function LayoutSidebar({ children }: { children: React.ReactNode }) {
   const location = useLocation();
-  const { role, profile, loading: profileLoading } = useProfile();
+  const { role, profile } = useProfile();
 
   const allLinks = [
     { name: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['hospital_staff'] },
     { name: 'Patient data', path: '/intake', icon: Users, roles: ['patient'] },
     { name: 'Claims', path: '/claims', icon: FileText, roles: ['hospital_staff'] },
     { name: 'Departments', path: '/departments', icon: Building, roles: ['hospital_staff'] },
+    { name: 'Nearby Facilities', path: '/nearby-facilities', icon: Map, roles: ['patient'] },
     { name: 'Appointments', path: '/appointments', icon: Calendar, roles: ['patient'] },
     { name: 'My Appointments', path: '/my-appointments', icon: Calendar, roles: ['patient'] },
   ];

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAuth } from '@clerk/clerk-react';
 import { CalendarClock, Loader2, Clock3, Users, History } from 'lucide-react';
 import LayoutSidebar from '../components/LayoutSidebar';
@@ -118,7 +118,7 @@ export default function MyAppointments() {
             <h1 style={{ fontSize: 'var(--font-h1)', fontWeight: 800, marginBottom: '0.35rem' }}>My Appointments</h1>
             <p style={{ color: 'var(--text-muted)' }}>See your current booking, history, live waiting time, and queue position.</p>
           </div>
-          <button className="btn-secondary" onClick={load} disabled={loading}>
+          <button className="btn-secondary" onClick={() => load()} disabled={loading}>
             {loading || refreshing ? 'Refreshing...' : 'Refresh'}
           </button>
         </div>

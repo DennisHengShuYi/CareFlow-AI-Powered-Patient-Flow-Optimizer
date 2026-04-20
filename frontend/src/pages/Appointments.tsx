@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@clerk/clerk-react';
 import { Calendar, Loader2, CheckCircle2, AlertTriangle } from 'lucide-react';
@@ -28,6 +28,11 @@ type Slot = {
 type LocationState = {
   triageContext?: TriageContext;
   hospitalId?: string;
+  selectedFacility?: {
+    id: string;
+    name: string;
+    address?: string;
+  };
 };
 
 function formatSlotTime(iso: string) {
@@ -49,6 +54,7 @@ export default function Appointments() {
 
   const [ctx, setCtx] = useState<TriageContext | null>(locationState.triageContext || null);
   const [hospitalId, setHospitalId] = useState<string | null>(locationState.hospitalId || null);
+  const [selectedFacility, setSelectedFacility] = useState<LocationState['selectedFacility'] | null>(locationState.selectedFacility || null);
   const [slots, setSlots] = useState<Slot[]>([]);
   const [loadingSlots, setLoadingSlots] = useState(false);
   const [bookingSlotId, setBookingSlotId] = useState<string | null>(null);
@@ -70,6 +76,26 @@ export default function Appointments() {
       // Ignore malformed cache.
     }
   }, [ctx]);
+
+  useEffect(() => {
+    if (locationState.hospitalId) {
+      sessionStorage.setItem('selectedFacility', JSON.stringify(locationState.selectedFacility || { id: locationState.hospitalId }));
+      return;
+    }
+
+    if (!hospitalId) {
+      const cachedFacility = sessionStorage.getItem('selectedFacility');
+      if (cachedFacility) {
+        try {
+          const parsed = JSON.parse(cachedFacility) as LocationState['selectedFacility'];
+          setHospitalId(parsed?.id || null);
+          setSelectedFacility(parsed || null);
+        } catch {
+          sessionStorage.removeItem('selectedFacility');
+        }
+      }
+    }
+  }, [hospitalId, locationState.hospitalId, locationState.selectedFacility]);
 
   const fetchSlots = async () => {
     if (!ctx?.recommended_specialist || !ctx?.urgency) {
@@ -198,6 +224,26 @@ export default function Appointments() {
             </div>
           </div>
 
+          {selectedFacility && (
+            <div style={{ background: '#eef6ff', border: '1px solid #bbdefb', borderRadius: '10px', padding: '0.85rem 1rem', display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Selected Facility</div>
+                <div style={{ fontWeight: 800 }}>{selectedFacility.name}</div>
+                {selectedFacility.address && <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{selectedFacility.address}</div>}
+              </div>
+              <button
+                className="btn-secondary"
+                onClick={() => {
+                  setHospitalId(null);
+                  setSelectedFacility(null);
+                  sessionStorage.removeItem('selectedFacility');
+                }}
+              >
+                Clear Facility Filter
+              </button>
+            </div>
+          )}
+
           {!ctx && (
             <div style={{ background: '#fff8e1', border: '1px solid #ffe082', borderRadius: '10px', padding: '0.85rem 1rem', color: '#8a6d00', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
               <AlertTriangle size={16} />
@@ -290,9 +336,6 @@ export default function Appointments() {
               <div><strong>Time:</strong> {formatSlotTime(confirmation.scheduled_at)}</div>
               {confirmation.estimated_wait_minutes != null && (
                 <div><strong>Estimated Wait:</strong> {confirmation.estimated_wait_minutes} min</div>
-              )}
-              {confirmation.appointment_priority && (
-                <div><strong>Priority:</strong> {confirmation.appointment_priority}</div>
               )}
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', flexWrap: 'wrap' }}>
