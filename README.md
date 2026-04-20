@@ -37,8 +37,8 @@ cd backend
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 
-# Install all necessary Python dependencies from the root directory
-pip install -r ../requirements.txt
+# Install all necessary Python dependencies from the backend directory
+pip install -r requirements.txt
 
 # Start the backend server
 $env:PYTHONPATH="."; uvicorn main:app --port 8002 --reload
@@ -53,8 +53,8 @@ cd backend
 python3 -m venv venv
 source venv/bin/activate
 
-# Install all necessary Python dependencies from the root directory
-pip install -r ../requirements.txt
+# Install all necessary Python dependencies from the backend directory
+pip install -r requirements.txt
 
 # Start the backend server
 PYTHONPATH="." uvicorn main:app --port 8002 --reload
