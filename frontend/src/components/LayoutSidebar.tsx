@@ -14,6 +14,7 @@ export default function LayoutSidebar({ children }: { children: React.ReactNode 
     { name: 'Claims', path: '/claims', icon: FileText, roles: ['hospital_staff'] },
     { name: 'Departments', path: '/departments', icon: Building, roles: ['hospital_staff'] },
     { name: 'Appointments', path: '/appointments', icon: Calendar, roles: ['patient'] },
+    { name: 'My Appointments', path: '/my-appointments', icon: Calendar, roles: ['patient'] },
   ];
 
   // Filter links based on role

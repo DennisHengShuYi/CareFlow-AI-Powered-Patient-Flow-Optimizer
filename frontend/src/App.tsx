@@ -8,6 +8,7 @@ import Claims from './pages/Claims';
 import Intake from './pages/Intake';
 import Departments from './pages/Departments';
 import Appointments from './pages/Appointments';
+import MyAppointments from './pages/MyAppointments';
 import Onboarding from './pages/Onboarding';
 import { useProfile } from './hooks/useProfile';
 import { Loader2 } from 'lucide-react';
@@ -154,6 +155,7 @@ function App() {
         <Route path="/intake" element={<ProtectedRoute allowedRoles={['patient']}><Intake /></ProtectedRoute>} />
         <Route path="/departments" element={<ProtectedRoute allowedRoles={['hospital_staff']}><Departments /></ProtectedRoute>} />
         <Route path="/appointments" element={<ProtectedRoute allowedRoles={['patient']}><Appointments /></ProtectedRoute>} />
+        <Route path="/my-appointments" element={<ProtectedRoute allowedRoles={['patient']}><MyAppointments /></ProtectedRoute>} />
         
         {/* Fallback */}
         <Route path="*" element={<Navigate to="/" replace />} />

@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import LayoutSidebar from '../components/LayoutSidebar';
 import { Link } from 'react-router-dom';
-import { ShieldAlert, HeartPulse, MapPin, CheckCircle2, ChevronRight, ChevronLeft, ArrowLeft, ArrowRight, Mic, Upload, Type, Loader2, X, FileText } from 'lucide-react';
+import { ShieldAlert, HeartPulse, MapPin, CheckCircle2, ChevronRight, ArrowLeft, ArrowRight, Mic, Upload, Type, Loader2, X, FileText } from 'lucide-react';
 import { useAuth } from '@clerk/clerk-react';
 import { useProfile } from '../hooks/useProfile';
 
@@ -72,6 +72,7 @@ export default function Intake() {
     setIsFollowingUp(false);
     setInputMode('text');
     setRecommendations([]);
+    sessionStorage.removeItem('latestTriageContext');
   };
 
   const processTriageText = async (text: string) => {
@@ -89,13 +90,29 @@ export default function Intake() {
           session_id: sessionId 
         })
       });
-      if (!res.ok) throw new Error('Failed to process text');
+      if (!res.ok) {
+        let message = 'Failed to process text';
+        try {
+          const err = await res.json();
+          message = err?.detail || message;
+        } catch {
+          // Keep default fallback message when response is not JSON.
+        }
+        throw new Error(message);
+      }
       const data = await res.json();
       
       setTriageData(data.triage);
       setSessionId(data.session_id);
       setNextAction(data.next_action);
       setQuestion(data.question);
+
+      sessionStorage.setItem('latestTriageContext', JSON.stringify({
+        session_id: data.session_id,
+        recommended_specialist: data?.triage?.recommended_specialist || '',
+        urgency: data?.triage?.urgency_score || '',
+        chief_complaint: data?.triage?.chief_complaint || '',
+      }));
       
       if (data.triage) {
         fetchRecommendations(data.triage);
@@ -106,7 +123,8 @@ export default function Intake() {
       setFollowUpResponse('');
     } catch (err) {
       console.error(err);
-      alert('Triage processing failed. Please check the backend connection.');
+      const message = err instanceof Error ? err.message : 'Triage processing failed. Please check backend logs.';
+      alert(message);
     } finally {
       setLoading(false);
     }
@@ -537,6 +555,15 @@ export default function Intake() {
                               ) : <span />}
                               <Link
                                 to="/appointments"
+                                state={{
+                                  triageContext: {
+                                    session_id: sessionId,
+                                    recommended_specialist: triageData?.recommended_specialist || '',
+                                    urgency: triageData?.urgency_score || '',
+                                    chief_complaint: triageData?.chief_complaint || '',
+                                  },
+                                  hospitalId: hosp.id,
+                                }}
                                 className="btn-primary"
                                 style={{ padding: '0.5rem 1rem', fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '0.35rem', background: isTop ? 'var(--primary)' : 'var(--neutral-300)', color: isTop ? 'white' : 'var(--text-main)', borderRadius: '9999px' }}
                               >

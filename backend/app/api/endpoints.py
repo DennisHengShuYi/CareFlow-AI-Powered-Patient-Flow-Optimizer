@@ -8,17 +8,18 @@ import json
 import math
 import time
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import text, select
+from sqlalchemy import text, select, and_, func
 
 from app.auth.clerk import verify_clerk_token
 from app.cache.redis_client import redis_client
 from app.config.llm_provider import llm
 from app.config.settings import settings
-from app.models.db import AsyncSessionLocal, AuditLog, IntakeLog, Session as SessionModel, Profile, Doctor, Room, Hospital, Department
+from app.models.db import AsyncSessionLocal, AuditLog, IntakeLog, Session as SessionModel, Profile, Doctor, Room, Hospital, Department, Appointment
 from app.services.booking_engine import booking_engine
 from app.services.intake_pipeline import intake_pipeline
 from app.services.triage_agent import triage_agent
@@ -108,11 +109,12 @@ class TextIntakeRequest(BaseModel):
 
 class BookRequest(BaseModel):
     session_id: str
-    patient_id: str
-    provider_id: str
+    patient_id: str | None = None
+    provider_id: str | None = None
     scheduled_at: str       # ISO 8601
     urgency: str
     complaint: str
+    recommended_specialist: str | None = None
     duration_minutes: int = 30
 
 
@@ -270,12 +272,21 @@ async def intake_text(
         import traceback
         traceback.print_exc()
         latency = int((time.time() - t0) * 1000)
+        err_text = str(exc)
+
+        # Bubble provider quota/rate-limit issues as 429 instead of generic 500.
+        status_code = 500
+        detail = f"Diagnostic: {type(exc).__name__} - {err_text}"
+        if "quota" in err_text.lower() or "rate limit" in err_text.lower() or "429" in err_text:
+            status_code = 429
+            detail = "Triage provider quota exceeded. Please wait and retry, or switch provider/API project."
+
         # Try audit but don't crash again
         try:
-            await _audit(session_id, "/intake/text", raw, latency, 500, str(exc))
+            await _audit(session_id, "/intake/text", raw, latency, status_code, err_text)
         except:
             pass
-        raise HTTPException(status_code=500, detail=f"Diagnostic: {type(exc).__name__} - {str(exc)}")
+        raise HTTPException(status_code=status_code, detail=detail)
 
 
 # ---------------------------------------------------------------------------
@@ -360,9 +371,10 @@ async def get_session(
 async def appointment_slots(
     specialty: str,
     urgency: str,
+    hospital_id: str | None = None,
     _user: dict = Depends(verify_clerk_token),
 ):
-    slots = await booking_engine.get_available_slots(specialty, urgency)
+    slots = await booking_engine.get_available_slots(specialty, urgency, hospital_id)
     return {"slots": slots}
 
 
@@ -372,7 +384,7 @@ async def appointment_slots(
 @router.post("/appointments/book")
 async def book_appointment(
     body: BookRequest,
-    _user: dict = Depends(verify_clerk_token),
+    user: dict = Depends(verify_clerk_token),
 ):
     t0 = time.time()
     try:
@@ -383,6 +395,8 @@ async def book_appointment(
             scheduled_at_iso=body.scheduled_at,
             urgency=body.urgency,
             complaint=body.complaint,
+            recommended_specialist=body.recommended_specialist,
+            patient_profile_id=user.get("sub"),
             duration_minutes=body.duration_minutes,
         )
         latency = int((time.time() - t0) * 1000)
@@ -392,6 +406,88 @@ async def book_appointment(
         latency = int((time.time() - t0) * 1000)
         await _audit(body.session_id, "/appointments/book", body.complaint, latency, 500, str(exc))
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/appointments/my")
+async def my_appointments(user: dict = Depends(verify_clerk_token)):
+    """Return current/upcoming/history appointments for the signed-in patient."""
+    clerk_id = user.get("sub") if isinstance(user, dict) else str(user)
+    now = datetime.utcnow().replace(tzinfo=timezone.utc)
+
+    async with AsyncSessionLocal() as db:
+        patient_res = await db.execute(
+            text("SELECT id FROM patients WHERE profile_id = :pid LIMIT 1"),
+            {"pid": clerk_id},
+        )
+        patient_row = patient_res.first()
+        if not patient_row:
+            return {"current": None, "upcoming": [], "history": []}
+        patient_id = patient_row[0]
+
+        appt_res = await db.execute(
+            select(Appointment)
+            .where(Appointment.patient_id == patient_id)
+            .order_by(Appointment.scheduled_at.desc())
+        )
+        appointments = appt_res.scalars().all()
+
+        async def enrich(appt: Appointment):
+            people_before = 0
+            if appt.doctor_id:
+                queue_res = await db.execute(
+                    select(func.count(Appointment.id)).where(
+                        and_(
+                            Appointment.doctor_id == appt.doctor_id,
+                            Appointment.status == "booked",
+                            Appointment.scheduled_at < appt.scheduled_at,
+                        )
+                    )
+                )
+                people_before = int(queue_res.scalar() or 0)
+            else:
+                queue_res = await db.execute(
+                    select(func.count(Appointment.id)).where(
+                        and_(
+                            Appointment.doctor_id.is_(None),
+                            Appointment.status == "booked",
+                            Appointment.scheduled_at < appt.scheduled_at,
+                        )
+                    )
+                )
+                people_before = int(queue_res.scalar() or 0)
+
+            wait_from_time = max(0, int((appt.scheduled_at - now).total_seconds() // 60))
+            live_wait_minutes = wait_from_time + (people_before * int(appt.duration_minutes or 30))
+
+            return {
+                "id": str(appt.id),
+                "session_id": str(appt.session_id),
+                "scheduled_at": appt.scheduled_at.isoformat(),
+                "duration_minutes": appt.duration_minutes,
+                "urgency": appt.urgency_level,
+                "status": appt.status,
+                "chief_complaint": appt.chief_complaint,
+                "doctor_id": str(appt.doctor_id) if appt.doctor_id else None,
+                "people_before": people_before,
+                "live_wait_minutes": live_wait_minutes,
+            }
+
+        upcoming_raw = [a for a in appointments if a.scheduled_at >= now and a.status == "booked"]
+        history_raw = [a for a in appointments if a.scheduled_at < now or a.status != "booked"]
+
+        current = None
+        if upcoming_raw:
+            nearest = sorted(upcoming_raw, key=lambda a: a.scheduled_at)[0]
+            current = await enrich(nearest)
+
+        upcoming = [await enrich(a) for a in sorted(upcoming_raw, key=lambda x: x.scheduled_at)]
+        history = [await enrich(a) for a in history_raw]
+
+        return {
+            "current": current,
+            "upcoming": upcoming,
+            "history": history,
+        }
 
 
 # ---------------------------------------------------------------------------
