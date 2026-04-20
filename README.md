@@ -7,9 +7,9 @@ MediRoute is a full-stack AI-powered healthcare platform designed to optimize pa
 |---|---|---|
 | **Frontend** | React + TypeScript + Vite | 5173 |
 | **Backend** | Python + FastAPI | 8002 |
+| **Triage Engine** | Multi-Agent Orchestrator (Google + Groq) | - |
 | **Database** | Supabase (PostgreSQL) | Hosted |
 | **Cache / Session** | Upstash Redis (Serverless REST) | Hosted |
-| **AI Engine** | Google Gemini (`gemini-2.5-flash-lite`) | Hosted |
 | **Auth** | Clerk | Hosted |
 
 ---
@@ -96,11 +96,17 @@ DATABASE_URL=postgresql+asyncpg://<user>:<password>@<host>:5432/postgres
 DATABASE_URL_DIRECT=postgresql+asyncpg://<user>:<password>@<host>:5432/postgres
 
 # ================================
-# LLM Provider
+# LLM Providers (Multi-Agent)
 # ================================
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=<your_gemini_api_key>
-MODEL_NAME=gemini-2.5-flash-lite
+GROQ_API_KEY=<your_groq_api_key>
+
+# Config-Driven Agent Models
+AGENT_EXTRACTOR_MODEL=models/gemini-3.1-flash-lite-preview
+AGENT_STRATEGIST_MODEL=models/gemini-2.5-flash-lite
+AGENT_CRITIC_MODEL=llama-3.3-70b-versatile
+AGENT_CRITIC_PROVIDER=groq
 
 # ================================
 # Upstash Redis
@@ -139,15 +145,17 @@ VITE_SUPABASE_ANON_KEY=<your_supabase_anon_key>
 ## 🛠️ Troubleshooting
 
 ### Port Already in Use
-If you see an error saying port 8001/8002 is already in use, kill the ghost process:
+If you see an error saying port 8002 is already in use, kill the ghost process:
 ```powershell
 # Kill all stale uvicorn/python processes (Windows)
 taskkill /F /IM uvicorn.exe /T
 taskkill /F /IM python.exe /T
-
-# Then restart the backend
-$env:PYTHONPATH="."; .\venv\Scripts\python.exe -m uvicorn main:app --port 8002 --reload
 ```
+
+### Memory Allocation Errors (Windows)
+If you see `OpenBLAS error: Memory allocation failed` or `Paging file too small`:
+1. Set the thread limit: `$env:OPENBLAS_NUM_THREADS=1`
+2. The system now uses **Lazy Loading** for heavy models (Whisper/PDF) to minimize startup memory footprint.
 
 ### CORS Errors in Browser
 Ensure the backend is running on port **8002** (not 8001). The CORS allowlist in `backend/main.py` is configured for:

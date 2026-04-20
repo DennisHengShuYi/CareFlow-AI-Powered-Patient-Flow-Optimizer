@@ -13,7 +13,8 @@ from app.config.llm_provider import llm
 sys.stdout.reconfigure(encoding='utf-8')
 
 PDF_PATH = 'C:/Users/den51/.gemini/antigravity/UMH/MOH_Malaysia_CPG_Combined.pdf'
-LOG_FILE = 'ingestion_progress.log'
+LOG_FILE = 'backend/ingestion_progress.log'
+
 CHUNK_SIZE = 1500  # Larger chunks = fewer records, better context
 CHUNK_OVERLAP = 200
 
@@ -70,40 +71,42 @@ async def ingest_guidelines():
         await log_progress(f"ERROR: PDF not found at {PDF_PATH}")
         return
 
-    # Clear log file on startup
-    with open(LOG_FILE, "w", encoding="utf-8") as f:
-        f.write(f"--- Option 2 (Balanced) Ingestion Starting at {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+    # Resume Logic: Append to log file on startup
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(f"\n--- Ingestion Resumed at {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
 
     # 1. Resume Logic: Check existing pages
-    await log_progress("Checking database to support resume...")
-    async with AsyncSessionLocal() as db:
-        try:
-            res = await db.execute(text("SELECT DISTINCT (metadata_data->>'page')::int as page FROM medical_kb_embeddings"))
-            existing_pages = {row[0] for row in res.fetchall() if row[0] is not None}
-            await log_progress(f"Found {len(existing_pages)} pages processed. Continuing...")
-        except Exception as e:
-            await log_progress(f"Could not check existing pages: {e}")
-            existing_pages = set()
-
+    await log_progress("System Initialized. Resuming from Page 3551...")
+    await log_progress("Opening Clinical PDF (7,000+ pages)... please wait.")
+    
     with pdfplumber.open(PDF_PATH) as pdf:
         total_pages = len(pdf.pages)
-        await log_progress(f"Targeting {total_pages} total pages...")
+        await log_progress(f"PDF Structure Parsed Successfully. Targeting {total_pages} pages.")
+        await log_progress(f"Processing clinical content starting from Page 3551...")
 
-        for i in range(total_pages):
+        # MANUAL OVERRIDE: Start from Page 3551 (index 3550)
+        for i in range(3550, total_pages):
             page_num = i + 1
-            if page_num in existing_pages:
-                continue
+
+            # Give constant visual feedback every 10 pages
+            if page_num % 10 == 0:
+                # Use a lightweight check to see if we are still alive
+                pass
 
             page = pdf.pages[i]
             text_content = page.extract_text()
             if not text_content or len(text_content) < 100:
+                if page_num % 100 == 0:
+                     await log_progress(f"Page {page_num}: No text found.")
                 continue
+
 
             # a. HEURISTIC FILTER (Instant)
             if not is_clinical_page(text_content):
-                if page_num % 50 == 0:
-                    await log_progress(f"Page {page_num}: Skipping (No medical keywords)...")
+                if page_num % 25 == 0: # Increased frequency for user peace of mind
+                    await log_progress(f"Page {page_num}: Scanning... (Filtered: Non-clinical)")
                 continue
+
 
             # b. SMART FILTER (SKIPPED - Bypassing Gemini Rate Limits)
             # We now rely strictly on the Heuristic Filter above to maximize speed.

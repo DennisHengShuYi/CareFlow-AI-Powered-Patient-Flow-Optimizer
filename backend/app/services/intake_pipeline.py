@@ -5,10 +5,7 @@ Produces a normalised IntakePayload before the triage agent.
 import io
 from typing import Optional
 
-import pdfplumber
-import pytesseract
-from PIL import Image
-from faster_whisper import WhisperModel
+# Heavy imports moved to lazy loaders to save memory
 from langdetect import detect, LangDetectException
 from pydantic import BaseModel, Field
 
@@ -17,12 +14,14 @@ from app.config.llm_provider import llm
 # ---------------------------------------------------------------------------
 # Whisper model — loaded once at import time (medium, CPU int8)
 # ---------------------------------------------------------------------------
-_whisper: Optional[WhisperModel] = None
+_whisper: Optional["WhisperModel"] = None
 
 
-def _get_whisper() -> WhisperModel:
+def _get_whisper() -> "WhisperModel":
     global _whisper
     if _whisper is None:
+        print("DEBUG: Lazy loading Whisper model (Memory Intensive)...")
+        from faster_whisper import WhisperModel
         _whisper = WhisperModel("medium", device="cpu", compute_type="int8")
     return _whisper
 
@@ -81,12 +80,15 @@ class IntakePipeline:
         raw_text = ""
 
         if mime_type == "application/pdf":
+            import pdfplumber
             with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
                 for page in pdf.pages:
                     t = page.extract_text()
                     if t:
                         raw_text += t + "\n"
         elif mime_type.startswith("image/"):
+            from PIL import Image
+            import pytesseract
             image = Image.open(io.BytesIO(file_bytes))
             # eng+msa covers English and Bahasa Malaysia tessdata packs
             raw_text = pytesseract.image_to_string(image, lang="eng+msa")
@@ -100,7 +102,11 @@ class IntakePipeline:
             "Preserve all Bahasa Malaysia and English content exactly. "
             "Output ONLY the corrected text — no commentary."
         )
-        corrected = await llm.generate(raw_text[:4000], correction_system, response_format="text")
+        try:
+            corrected = await llm.generate(raw_text[:4000], correction_system, response_format="text")
+        except Exception as e:
+            print(f"DEBUG: OCR Correction LLM pass failed: {e}")
+            corrected = raw_text # Fallback to raw OCR
 
         lang = self._detect_language(corrected)
         return IntakePayload(

@@ -17,7 +17,7 @@ class SupabaseRESTClient:
         if not self.url or not self.key:
             return None
             
-        async with httpx.AsyncClient(verify=False) as client:
+        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
             endpoint = f"{self.url}/rest/v1/{table}"
             response = await client.get(endpoint, headers=self.headers, params=params)
             if response.status_code not in [200, 201]:
@@ -30,7 +30,7 @@ class SupabaseRESTClient:
         if not self.url or not self.key:
             return None
             
-        async with httpx.AsyncClient(verify=False) as client:
+        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
             endpoint = f"{self.url}/rest/v1/{table}"
             response = await client.post(endpoint, headers=self.headers, json=data)
             if response.status_code not in [200, 201]:

@@ -16,24 +16,42 @@ class LLMProvider:
         self.provider = settings.LLM_PROVIDER
         self.embedding_provider = getattr(settings, "EMBEDDING_PROVIDER", settings.LLM_PROVIDER)
         self._bge_model = None # Lazy load
+        self._openai_client = None
+        self._groq_client = None
 
         if self.provider == "gemini":
             print(f"DEBUG: Initializing Gemini with model: {settings.MODEL_NAME}")
             genai.configure(api_key=settings.GEMINI_API_KEY)
-            self._gemini_model = genai.GenerativeModel(settings.MODEL_NAME)
+            self._gemini_model_cache = {} # Cache models by name
 
-        elif self.provider == "zhipu":
-            # We call ZhipuAI via raw httpx to stay fully async
-            self._zhipu_base = "https://open.bigmodel.cn/api/paas/v4"
-            self._zhipu_headers = {
-                "Authorization": f"Bearer {settings.ZHIPU_API_KEY}",
-                "Content-Type": "application/json",
-            }
-        elif self.provider == "bge":
-            # If BGE is set as LLM_PROVIDER (unlikely but possible), it has no generate()
-            pass
-        else:
-            raise ValueError(f"Unknown LLM_PROVIDER: '{self.provider}'. Must be 'gemini' or 'zhipu'.")
+    def _get_gemini_model(self, model_name: str):
+        if model_name not in self._gemini_model_cache:
+            self._gemini_model_cache[model_name] = genai.GenerativeModel(model_name)
+        return self._gemini_model_cache[model_name]
+
+    def _get_openai_client(self):
+        if self._openai_client is None:
+            from openai import AsyncOpenAI
+            import httpx
+            # Use a fresh client to avoid 'proxies' keyword conflicts in some environments
+            http_client = httpx.AsyncClient()
+            self._openai_client = AsyncOpenAI(
+                api_key=settings.OPENAI_API_KEY,
+                http_client=http_client
+            )
+        return self._openai_client
+
+    def _get_groq_client(self):
+        if self._groq_client is None:
+            from openai import AsyncOpenAI
+            import httpx
+            http_client = httpx.AsyncClient()
+            self._groq_client = AsyncOpenAI(
+                api_key=settings.GROQ_API_KEY,
+                base_url="https://api.groq.com/openai/v1",
+                http_client=http_client
+            )
+        return self._groq_client
 
     # ------------------------------------------------------------------
     # Text generation
@@ -43,12 +61,58 @@ class LLMProvider:
         prompt: str,
         system: str,
         response_format: str = "text",   # "text" | "json"
+        model: str | None = None,        # Optional model override
+        provider: str | None = None,     # Optional provider override
     ) -> str:
-        if self.provider == "gemini":
-            return await self._gemini_generate(prompt, system, response_format)
-        return await self._zhipu_generate(prompt, system, response_format)
+        target_provider = provider or self.provider
+        target_model = model or settings.MODEL_NAME
 
-    async def _gemini_generate(self, prompt: str, system: str, response_format: str) -> str:
+        if target_provider == "openai":
+            return await self._openai_generate(prompt, system, response_format, target_model)
+        
+        if target_provider == "groq":
+            return await self._groq_generate(prompt, system, response_format, target_model)
+        
+        if target_provider == "gemini":
+            return await self._gemini_generate(prompt, system, response_format, target_model)
+            
+        return await self._zhipu_generate(prompt, system, response_format, target_model)
+
+    async def _openai_generate(self, prompt: str, system: str, response_format: str, model: str) -> str:
+        client = self._get_openai_client()
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ]
+        
+        payload = {
+            "model": model,
+            "messages": messages,
+        }
+        if response_format == "json":
+            payload["response_format"] = {"type": "json_object"}
+
+        response = await client.chat.completions.create(**payload)
+        return response.choices[0].message.content
+
+    async def _groq_generate(self, prompt: str, system: str, response_format: str, model: str) -> str:
+        client = self._get_groq_client()
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ]
+        
+        payload = {
+            "model": model,
+            "messages": messages,
+        }
+        if response_format == "json":
+            payload["response_format"] = {"type": "json_object"}
+
+        response = await client.chat.completions.create(**payload)
+        return response.choices[0].message.content
+
+    async def _gemini_generate(self, prompt: str, system: str, response_format: str, model: str) -> str:
         generation_config = genai.GenerationConfig(
             response_mime_type=(
                 "application/json" if response_format == "json" else "text/plain"
@@ -57,12 +121,14 @@ class LLMProvider:
         # Combine system and prompt for simplicity in this factory
         full_prompt = f"System Instruction:\n{system}\n\nUser Input:\n{prompt}"
         
+        model_obj = self._get_gemini_model(model)
+        
         import asyncio
         loop = asyncio.get_event_loop()
         try:
             response = await loop.run_in_executor(
                 None,
-                lambda: self._gemini_model.generate_content(
+                lambda: model_obj.generate_content(
                     full_prompt, generation_config=generation_config
                 ),
             )
@@ -73,9 +139,9 @@ class LLMProvider:
             print(f"LLM Error (Gemini): {e}")
             raise
 
-    async def _zhipu_generate(self, prompt: str, system: str, response_format: str) -> str:
+    async def _zhipu_generate(self, prompt: str, system: str, response_format: str, model: str) -> str:
         payload: dict = {
-            "model": settings.MODEL_NAME,
+            "model": model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},

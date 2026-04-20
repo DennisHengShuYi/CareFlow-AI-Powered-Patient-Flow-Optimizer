@@ -4,6 +4,7 @@ from .api.endpoints import router
 from .config.settings import settings
 
 app = FastAPI(title="MediRoute Patient Intake API")
+print("--- BACKEND STARTUP: RESILIENCE_V1 (Timeout 30s + RAG Fallback) ---")
 
 app.add_middleware(
     CORSMiddleware,
