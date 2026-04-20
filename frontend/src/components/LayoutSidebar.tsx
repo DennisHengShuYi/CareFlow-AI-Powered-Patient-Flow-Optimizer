@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, FileText, Building, Calendar } from 'lucide-react';
+import { LayoutDashboard, Users, FileText, Building, Calendar, Archive } from 'lucide-react';
 import { SignedIn, SignedOut, UserButton, useClerk } from '@clerk/clerk-react';
 import { useProfile } from '../hooks/useProfile';
 import { ShieldCheck } from 'lucide-react';
@@ -10,8 +10,10 @@ export default function LayoutSidebar({ children }: { children: React.ReactNode 
 
   const allLinks = [
     { name: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['hospital_staff'] },
+    { name: 'Patients', path: '/patients', icon: Users, roles: ['hospital_staff'] },
     { name: 'Patient data', path: '/intake', icon: Users, roles: ['patient'] },
     { name: 'Claims', path: '/claims', icon: FileText, roles: ['hospital_staff'] },
+    { name: 'Archives', path: '/archives', icon: Archive, roles: ['hospital_staff'] },
     { name: 'Departments', path: '/departments', icon: Building, roles: ['hospital_staff'] },
     { name: 'Appointments', path: '/appointments', icon: Calendar, roles: ['patient'] },
   ];
@@ -42,7 +44,7 @@ export default function LayoutSidebar({ children }: { children: React.ReactNode 
           <div style={{ width: '32px', height: '32px', minWidth: '32px', borderRadius: '50%', background: 'var(--primary)', color: 'white', display: 'flex', justifyContent: 'center', alignItems: 'center', fontWeight: 'bold' }}>+</div>
           <Link to="/" style={{ whiteSpace: 'nowrap' }} className="hide-on-mobile">
             <h2 style={{ fontSize: '1.25rem', color: 'var(--secondary)' }}>CareFlow</h2>
-            <div style={{ fontSize: '0.65rem', letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Healthcare<br/>Intelligence</div>
+            <div style={{ fontSize: '0.65rem', letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Healthcare<br />Intelligence</div>
           </Link>
         </div>
 

@@ -5,7 +5,6 @@ from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
-
 from app.config.settings import settings
 
 # ---------------------------------------------------------------------------
@@ -19,7 +18,7 @@ class Base(DeclarativeBase):
 # Engine and Session
 # ---------------------------------------------------------------------------
 # Note: Force the direct DB URL to bypass any stale os.environ variables trapped in uvicorn
-_DB_URL = "postgresql+asyncpg://postgres:1tzM0ZzSOS3oicsB@db.guiimyubbbrnzmzncetx.supabase.co:5432/postgres"
+_DB_URL = "postgresql+asyncpg://postgres:1tzM0ZzSOS3oicsB@db.guiimyubbbrnzmzncetx.supabase.co:5432/postgres?sslmode=require"
 
 engine = create_async_engine(
     _DB_URL,
