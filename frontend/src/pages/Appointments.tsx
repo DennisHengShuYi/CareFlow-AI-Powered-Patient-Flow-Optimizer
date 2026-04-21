@@ -175,6 +175,7 @@ export default function Appointments() {
       }
 
       const res = await fetch(`http://localhost:8002/appointments/slots?${params.toString()}`, {
+        cache: 'no-store',
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -235,6 +236,7 @@ export default function Appointments() {
         body: JSON.stringify({
           session_id: ctx.session_id,
           provider_id: slot.doctor_id,
+          hospital_id: slot.hospital_id,
           scheduled_at: slot.scheduled_at,
           urgency: ctx.urgency,
           complaint: ctx.chief_complaint,
@@ -256,6 +258,7 @@ export default function Appointments() {
 
       setStatus(`Appointment confirmed at ${slot.clinic_name} on ${formatSlotTime(slot.scheduled_at)}.`);
       setConfirmation(slot);
+      setSlots((currentSlots) => currentSlots.filter((currentSlot) => !(currentSlot.doctor_id === slot.doctor_id && currentSlot.hospital_id === slot.hospital_id && currentSlot.scheduled_at === slot.scheduled_at)));
       await fetchSlots();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Booking failed.');
@@ -405,7 +408,7 @@ export default function Appointments() {
                 <div key={group.key} style={{ display: 'grid', gap: '0.75rem' }}>
                   <div style={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--text-muted)' }}>{group.label}</div>
                   {group.slots.map((slot) => {
-                    const slotId = slot.doctor_id + slot.scheduled_at;
+                    const slotId = `${slot.doctor_id || 'queue'}|${slot.hospital_id}|${slot.scheduled_at}`;
                     const booking = bookingSlotId === slotId;
                     return (
                       <div key={slotId} className="appt-slot-card">
