@@ -1,0 +1,1079 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
+
+:root {
+  --primary: #1E88E5;
+  --primary-hover: #1565C0;
+  --primary-fixed: #E3F2FD;
+  --secondary: #0D47A1;
+  --tertiary: #29B6F6;
+  --neutral-100: #ffffff;
+  --neutral-200: #f6faff;
+  --neutral-300: #edf4fc;
+  --neutral-400: #e8eff7;
+  --neutral-500: #dce3eb;
+  --text-main: #151c22;
+  --text-muted: #404752;
+  --success: #2E7D32;
+  --warning: #F9A825;
+  --danger: #C62828;
+  
+  --bg-gradient: linear-gradient(135deg, var(--neutral-200) 0%, #e0edfb 100%);
+  --shadow-sm: 0 4px 10px rgba(227, 242, 253, 0.4);
+  --shadow-md: 0 10px 20px rgba(227, 242, 253, 0.6);
+  --shadow-lg: 0 20px 40px rgba(227, 242, 253, 0.8);
+
+  /* Responsive Variables */
+  --sidebar-w: 260px;
+  --page-padding: 3rem 4rem;
+  --header-padding: 0 2rem;
+  --container-gap: 2rem;
+  --font-h1: 2.5rem;
+  --font-h2: 1.5rem;
+  --font-p: 1.125rem;
+  --sidebar-block-padding: 2rem;
+  --sidebar-inline-padding: 2rem;
+  --sidebar-brand-gap: 3rem;
+  --sidebar-nav-padding: 1rem 2rem;
+}
+
+@media (max-width: 1200px) {
+  :root {
+    --page-padding: 2rem 2.5rem;
+    --font-h1: 2.25rem;
+  }
+}
+
+@media (max-width: 900px) {
+  :root {
+    --sidebar-w: 200px;
+    --page-padding: 2rem;
+    --font-h1: 2rem;
+    --font-h2: 1.25rem;
+    --sidebar-inline-padding: 1.1rem;
+    --sidebar-brand-gap: 1.75rem;
+    --sidebar-nav-padding: 0.9rem 1.1rem;
+  }
+}
+
+@media (max-width: 768px) {
+  :root {
+    --sidebar-w: 80px; /* Collapsed sidebar on mobile/tablet */
+    --page-padding: 1.5rem;
+    --container-gap: 1rem;
+    --font-h1: 1.75rem;
+    --font-h2: 1.125rem;
+    --font-p: 1rem;
+    --sidebar-block-padding: 1.25rem;
+    --sidebar-inline-padding: 0.75rem;
+    --sidebar-brand-gap: 1.25rem;
+    --sidebar-nav-padding: 0.75rem 0.8rem;
+  }
+}
+
+@media (max-width: 480px) {
+  :root {
+    --page-padding: 1rem;
+    --font-h1: 1.5rem;
+  }
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  color: var(--text-main);
+  background-color: var(--neutral-300);
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  color: var(--text-main);
+  margin: 0;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+  font-family: 'Inter', sans-serif;
+  font-weight: 500;
+  transition: all 0.2s ease-in-out;
+}
+
+button:hover {
+  transform: translateY(-1px);
+}
+
+button:active {
+  transform: translateY(1px);
+}
+
+.btn-primary {
+  background: linear-gradient(90deg, var(--primary), var(--secondary));
+  color: white;
+  padding: 0.75rem 1.5rem;
+  border-radius: 9999px;
+  box-shadow: 0 4px 12px rgba(30, 136, 229, 0.3);
+}
+
+.btn-primary:hover {
+  box-shadow: 0 6px 16px rgba(30, 136, 229, 0.4);
+}
+
+.btn-secondary {
+  background: var(--neutral-400);
+  color: var(--text-main);
+  padding: 0.75rem 1.5rem;
+  border-radius: 9999px;
+}
+
+.btn-secondary:hover {
+  background: var(--neutral-500);
+}
+
+.card {
+  background: var(--neutral-100);
+  border-radius: 1rem;
+  padding: 1.5rem;
+  box-shadow: var(--shadow-sm);
+}
+
+a {
+  text-decoration: none;
+  color: inherit;
+}
+
+.layout-app {
+  display: flex;
+  min-height: 100vh;
+  width: 100vw;
+  overflow-x: hidden;
+}
+
+.layout-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+/* Glassmorphism utility */
+.glass {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.glass-dark {
+  background: rgba(21, 28, 34, 0.05);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(21, 28, 34, 0.1);
+}
+
+/* Layout Utilities */
+.flex { display: flex; }
+.flex-col { flex-direction: column; }
+.flex-1 { flex: 1; }
+.flex-wrap { flex-wrap: wrap; }
+.items-center { align-items: center; }
+.items-start { align-items: flex-start; }
+.items-end { align-items: flex-end; }
+.justify-between { justify-content: space-between; }
+.justify-center { justify-content: center; }
+.gap-1 { gap: 0.25rem; }
+.gap-2 { gap: 0.5rem; }
+.gap-3 { gap: 0.75rem; }
+.gap-4 { gap: 1rem; }
+.gap-6 { gap: 1.5rem; }
+.gap-8 { gap: 2rem; }
+.w-full { width: 100%; }
+.h-full { height: 100%; }
+.overflow-hidden { overflow: hidden; }
+.overflow-y-auto { overflow-y: auto; }
+
+/* Spacing Utilities */
+.mt-1 { margin-top: 0.25rem; }
+.mt-2 { margin-top: 0.5rem; }
+.mt-4 { margin-top: 1rem; }
+.mb-1 { margin-bottom: 0.25rem; }
+.mb-2 { margin-bottom: 0.5rem; }
+.mb-3 { margin-bottom: 0.75rem; }
+.mb-4 { margin-bottom: 1rem; }
+.mb-6 { margin-bottom: 1.5rem; }
+.mb-8 { margin-bottom: 2rem; }
+.p-0 { padding: 0 !important; }
+.p-1 { padding: 0.25rem; }
+.p-2 { padding: 0.5rem; }
+.p-3 { padding: 0.75rem; }
+.p-4 { padding: 1rem; }
+.p-5 { padding: 1.25rem; }
+.p-6 { padding: 1.5rem; }
+.p-8 { padding: 2rem; }
+.py-0\.5 { padding-top: 0.125rem; padding-bottom: 0.125rem; }
+.py-1 { padding-top: 0.25rem; padding-bottom: 0.25rem; }
+.py-2 { padding-top: 0.5rem; padding-bottom: 0.5rem; }
+.py-3 { padding-top: 0.75rem; padding-bottom: 0.75rem; }
+.px-2 { padding-left: 0.5rem; padding-right: 0.5rem; }
+.px-3 { padding-left: 0.75rem; padding-right: 0.75rem; }
+.px-4 { padding-left: 1rem; padding-right: 1rem; }
+.px-6 { padding-left: 1.5rem; padding-right: 1.5rem; }
+.pt-4 { padding-top: 1rem; }
+.pb-6 { padding-bottom: 1.5rem; }
+.pb-10 { padding-bottom: 2.5rem; }
+
+/* Stack spacing */
+.space-y-1 > * + * { margin-top: 0.25rem; }
+.space-y-3 > * + * { margin-top: 0.75rem; }
+.space-y-4 > * + * { margin-top: 1rem; }
+.space-y-6 > * + * { margin-top: 1.5rem; }
+.space-y-8 > * + * { margin-top: 2rem; }
+
+/* Typography */
+.text-xs { font-size: 0.75rem; }
+.text-[9px] { font-size: 9px; }
+.text-[10px] { font-size: 10px; }
+.text-sm { font-size: 0.875rem; }
+.text-base { font-size: 1rem; }
+.text-lg { font-size: 1.125rem; }
+.text-xl { font-size: 1.25rem; }
+.text-2xl { font-size: 1.5rem; }
+.text-3xl { font-size: 1.875rem; }
+.font-bold { font-weight: 700; }
+.font-semibold { font-weight: 600; }
+.font-medium { font-weight: 500; }
+.font-extrabold { font-weight: 800; }
+.uppercase { text-transform: uppercase; }
+.italic { font-style: italic; }
+.leading-relaxed { line-height: 1.625; }
+.letter-spacing-tight { letter-spacing: -0.025em; }
+
+/* Colors & Components */
+.text-muted { color: var(--text-muted); }
+.text-primary { color: var(--primary); }
+.text-danger { color: var(--danger); }
+.text-success { color: var(--success); }
+.text-slate-800 { color: #1e293b; }
+.bg-white { background-color: #ffffff; }
+.bg-neutral-200 { background-color: var(--neutral-200); }
+.bg-neutral-300 { background-color: var(--neutral-300); }
+.bg-primary { background-color: var(--primary); }
+.bg-danger { background-color: var(--danger); }
+.bg-white\/30 { background-color: rgba(255, 255, 255, 0.3); }
+.bg-white\/40 { background-color: rgba(255, 255, 255, 0.4); }
+.bg-white\/50 { background-color: rgba(255, 255, 255, 0.5); }
+.bg-primary\/5 { background-color: rgba(30, 136, 229, 0.05); }
+.border-primary { border-color: var(--primary); }
+.border-primary\/20 { border-color: rgba(30, 136, 229, 0.2); }
+.border-danger { border-color: var(--danger); }
+.shadow-sm { box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); }
+.shadow-lg { box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); }
+.shadow-2xl { box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25); }
+.rounded-lg { border-radius: 0.5rem; }
+.rounded-xl { border-radius: 0.75rem; }
+.rounded-2xl { border-radius: 1rem; }
+.rounded-full { border-radius: 9999px; }
+
+/* Grid Utilities */
+.grid { display: grid; }
+.grid-cols-1 { grid-template-columns: repeat(1, minmax(0, 1fr)); }
+.grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (min-width: 768px) {
+  .md\:grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .md\:grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* Misc */
+.animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .5; }
+}
+
+.triage-progress-panel {
+  border: 1px solid var(--neutral-400);
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  border-radius: 12px;
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.triage-progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.triage-progress-title {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--secondary);
+}
+
+.triage-progress-time {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.triage-progress-track {
+  width: 100%;
+  height: 8px;
+  border-radius: 9999px;
+  background: var(--neutral-300);
+  overflow: hidden;
+}
+
+.triage-progress-fill {
+  height: 100%;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, var(--primary), var(--tertiary));
+  position: relative;
+  transition: width 0.8s ease;
+}
+
+.triage-progress-fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, transparent 15%, rgba(255, 255, 255, 0.45) 50%, transparent 85%);
+  animation: triageProgressShimmer 1.4s linear infinite;
+}
+
+.triage-progress-status {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+@keyframes triageProgressShimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+.transition-colors { transition-property: background-color, border-color, color, fill, stroke; transition-duration: 150ms; }
+.scale-105 { transform: scale(1.05); }
+.ring-2 { --ring-offset-shadow: var(--ring-inset) 0 0 0 var(--ring-offset-width) var(--ring-offset-color); --ring-shadow: var(--ring-inset) 0 0 0 calc(2px + var(--ring-offset-width)) var(--ring-color); box-shadow: var(--ring-offset-shadow), var(--ring-shadow), var(--shadow, 0 0 #0000); }
+.ring-primary { --ring-color: var(--primary); }
+
+/* Responsive Utilities */
+@media (max-width: 768px) {
+  .hide-on-mobile {
+    display: none !important;
+  }
+  .center-on-mobile {
+    justify-content: center !important;
+    padding: 1rem 0 !important;
+  }
+}
+
+.responsive-padding {
+  padding: var(--page-padding) !important;
+}
+
+.topnav-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1rem 3rem;
+  border-bottom: 1px solid var(--neutral-400);
+  background-color: var(--neutral-100);
+}
+
+.topnav-links {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+}
+
+.topnav-links ul {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  gap: 2rem;
+}
+
+.topnav-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+@media (max-width: 1024px) {
+  .topnav-header {
+    padding: 0.9rem 1.2rem;
+    flex-wrap: wrap;
+  }
+
+  .topnav-links {
+    order: 3;
+    width: 100%;
+    justify-content: flex-start;
+    overflow-x: auto;
+  }
+
+  .topnav-links ul {
+    gap: 1rem;
+    padding-bottom: 0.2rem;
+    white-space: nowrap;
+  }
+
+  .topnav-actions {
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+}
+
+.sidebar-brand {
+  padding: 0 var(--sidebar-inline-padding);
+  margin-bottom: var(--sidebar-brand-gap);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  overflow: hidden;
+}
+
+.sidebar-cta-wrap {
+  padding: 0 calc(var(--sidebar-inline-padding) - 0.5rem);
+  margin-bottom: 2rem;
+  overflow: hidden;
+}
+
+.sidebar-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: var(--sidebar-nav-padding);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.sidebar-footer {
+  padding: 2rem calc(var(--sidebar-inline-padding) - 0.5rem) 0;
+  border-top: 1px solid var(--neutral-400);
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  overflow: hidden;
+}
+
+.appt-context-card {
+  flex: 1;
+  min-width: 220px;
+  background: var(--neutral-200);
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+}
+
+.appt-slot-card {
+  border: 1px solid var(--neutral-400);
+  border-radius: 12px;
+  padding: 1rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.appt-slot-main {
+  min-width: 240px;
+  flex: 1;
+}
+
+.appt-slot-side {
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.55rem;
+}
+
+.facility-row-main {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 260px;
+  flex: 1;
+}
+
+.facility-row-side {
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.55rem;
+}
+
+.facility-map {
+  height: 520px;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid var(--neutral-400);
+}
+
+/* LiveTriage + Departments responsive helpers */
+@media (max-width: 1024px) {
+  .triage-queue-table-header {
+    display: none !important;
+  }
+
+  .triage-queue-row {
+    grid-template-columns: 1fr !important;
+    gap: 0.75rem !important;
+    align-items: flex-start !important;
+  }
+
+  .triage-search-box {
+    max-width: 100% !important;
+    width: 100% !important;
+  }
+
+  .triage-top-actions > .card,
+  .triage-top-actions > button {
+    flex: 1 1 220px;
+  }
+
+  .triage-vitals-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .departments-manage-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .departments-inline-form {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 768px) {
+  .triage-action-row {
+    flex-direction: column;
+  }
+
+  .triage-override-grid {
+    flex-direction: column;
+  }
+
+  .triage-vitals-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .departments-tab-toggle {
+    display: flex !important;
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .departments-tab-toggle > button {
+    flex: 1 1 180px;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .live-triage-page h1,
+  .departments-page h1 {
+    font-size: 1.75rem !important;
+  }
+
+  .triage-top-actions {
+    width: 100%;
+    gap: 0.75rem !important;
+  }
+
+  .triage-top-actions > .card,
+  .triage-top-actions > button {
+    width: 100%;
+  }
+
+  .triage-queue-controls {
+    width: 100%;
+    align-items: stretch !important;
+  }
+
+  .triage-queue-controls > * {
+    width: 100%;
+  }
+
+  .triage-queue-row {
+    padding: 0.85rem !important;
+  }
+
+  .triage-action-row button,
+  .triage-override-grid > div,
+  .departments-inline-form > * {
+    width: 100%;
+  }
+
+  .departments-tab-toggle > button {
+    flex: 1 1 100%;
+  }
+
+  .departments-manage-grid section {
+    padding: 1rem !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .appt-context-card,
+  .appt-slot-main,
+  .appt-slot-side,
+  .facility-row-main,
+  .facility-row-side {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .appt-slot-side,
+  .facility-row-side {
+    align-items: flex-start;
+  }
+
+  .facility-map {
+    height: 360px;
+  }
+}
+
+@media (max-width: 480px) {
+  .facility-map {
+    height: 300px;
+  }
+}
+
+/* Page-level wrapper for Intake / Patient pages */
+.intake-page-wrapper {
+  padding: 2rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
+}
+
+@media (max-width: 768px) {
+  .intake-page-wrapper {
+    padding: 1.25rem 1rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .intake-page-wrapper {
+    padding: 1rem 0.75rem;
+  }
+}
+
+.responsive-grid {
+  display: grid;
+  gap: var(--container-gap);
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+@media (max-width: 600px) {
+  .responsive-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Intake / Patient Page Responsive ─────────────────────── */
+
+/* Bottom Navigation Bar (mobile only) */
+.mobile-bottom-nav {
+  display: none;
+}
+
+@media (max-width: 480px) {
+  .mobile-bottom-nav {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--neutral-100);
+    border-top: 1px solid var(--neutral-400);
+    z-index: 100;
+    padding: 0.35rem 0 0.5rem;
+    box-shadow: 0 -4px 20px rgba(30, 136, 229, 0.08);
+    /* equal columns for ALL children */
+    justify-content: stretch;
+    align-items: stretch;
+  }
+  /* Every direct child (a, button, div) gets equal flex column */
+  .mobile-bottom-nav > * {
+    flex: 1;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center;
+    gap: 0.2rem;
+    padding: 0.4rem 0.25rem;
+    font-size: 0.6rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-decoration: none;
+    border-radius: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    transform: none !important;
+    min-width: 0;
+  }
+  .mobile-bottom-nav > * span {
+    width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .mobile-bottom-nav > a.active {
+    color: var(--primary);
+  }
+  /* Push main content above bottom nav */
+  .layout-main {
+    padding-bottom: 72px;
+  }
+  /* Hide the sidebar on mobile — bottom nav takes over */
+  .sidebar-hide-mobile {
+    display: none !important;
+  }
+}
+
+/* On tablets (481–768px): icon-only sidebar, no bottom nav */
+@media (min-width: 481px) and (max-width: 768px) {
+  .mobile-bottom-nav {
+    display: none !important;
+  }
+  .sidebar-hide-mobile {
+    display: flex !important;
+    width: 70px !important;
+    min-width: 70px !important;
+  }
+}
+
+/* Intake page — step 1 card */
+.intake-card {
+  width: 100%;
+  max-width: 800px;
+  padding: var(--container-gap);
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+/* Intake page — step 2 triage results card */
+.triage-card {
+  width: 100%;
+  max-width: 1000px;
+  display: flex;
+  flex-direction: column;
+  padding: var(--container-gap);
+  box-sizing: border-box;
+}
+
+/* Both cards must never overflow horizontally */
+@media (max-width: 480px) {
+  .intake-card,
+  .triage-card {
+    max-width: 100%;
+    min-width: 0;
+    border-radius: 0.75rem;
+  }
+}
+
+/* Input mode selector buttons */
+.intake-mode-buttons {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 2rem;
+}
+
+.intake-mode-btn {
+  flex: 1;
+  min-width: 120px;
+  padding: 1rem;
+}
+
+@media (max-width: 480px) {
+  .intake-mode-buttons {
+    gap: 0.5rem;
+    margin-bottom: 1.25rem;
+  }
+  .intake-mode-btn {
+    flex: 1 1 calc(50% - 0.5rem);
+    min-width: unset;
+    padding: 0.75rem 0.5rem;
+    font-size: 0.8rem;
+  }
+}
+
+/* Triage result two-column grid */
+.triage-results-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 2rem;
+  margin-bottom: 2rem;
+  width: 100%;
+}
+
+@media (max-width: 700px) {
+  .triage-results-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+}
+
+/* Triage summary card */
+.triage-summary-col {
+  background: var(--neutral-200);
+  border-radius: 1rem;
+  padding: 2rem;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Triage reasoning column */
+.triage-reasoning-col {
+  background: var(--neutral-100);
+  border-radius: 1rem;
+  padding: 2rem;
+  border: 1px solid var(--neutral-400);
+}
+
+@media (max-width: 768px) {
+  .triage-summary-col,
+  .triage-reasoning-col {
+    padding: 1.25rem;
+  }
+  .intake-card,
+  .triage-card {
+    padding: 1.25rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .triage-summary-col,
+  .triage-reasoning-col {
+    padding: 1rem;
+  }
+  .intake-card,
+  .triage-card {
+    padding: 1rem;
+  }
+}
+
+/* Language toggle — right aligned but responsive */
+.lang-toggle-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 2rem;
+  width: 100%;
+  align-self: stretch;
+  box-sizing: border-box;
+}
+
+@media (max-width: 480px) {
+  .lang-toggle-row {
+    justify-content: center;
+    margin-bottom: 1rem;
+  }
+}
+
+/* Triage header row (title + urgency badge) */
+.triage-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 2rem;
+  gap: 1rem;
+}
+
+@media (max-width: 480px) {
+  .triage-header-row {
+    flex-direction: column;
+    align-items: flex-start;
+    margin-bottom: 1.25rem;
+  }
+}
+
+/* Hospital card footer (phone + book button) */
+.hosp-footer-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* Follow-up action buttons row */
+.followup-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.followup-actions button {
+  flex: 1;
+  min-width: 80px;
+}
+
+@media (max-width: 480px) {
+  .followup-actions {
+    flex-direction: column;
+  }
+  .followup-actions button {
+    flex: 1 1 auto;
+    width: 100%;
+  }
+}
+
+/* Retake assessment footer */
+.intake-footer-row {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  margin-top: 1rem;
+}
+
+/* Voice transcript box */
+.voice-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  background: var(--neutral-200);
+  padding: 2rem;
+  border-radius: 1rem;
+  border: 1px solid var(--neutral-400);
+}
+
+@media (max-width: 480px) {
+  .voice-panel {
+    padding: 1.25rem;
+    gap: 1rem;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   MOBILE RESPONSIVE — Intake Triage Results
+   Pictures 1 (Summary), 2 (Hospital Cards), 3 (Reasoning)
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── "LLM Triage Complete" title + subtitle: center on mobile/tablet ── */
+@media (max-width: 1024px) {
+  .triage-card-title,
+  .triage-card-subtitle {
+    text-align: center;
+  }
+}
+
+/* ── Picture 1: AI Triage Summary — center header + cards ── */
+@media (max-width: 1024px) {
+  /* Stack assessment label, h2, and urgency pill centrally */
+  .triage-header-row {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+  }
+
+  /* Chief Complaint + Recommended Specialty cards: center text */
+  .triage-info-card {
+    text-align: center;
+  }
+
+  /* Specialty icon + text row: center */
+  .specialty-row {
+    justify-content: center;
+  }
+
+
+  /* Picture 3: "CHAIN OF THOUGHT" label and "Clinical Reasoning" h2: center */
+  .reasoning-label,
+  .reasoning-title {
+    text-align: center;
+  }
+
+  /* Keep reasoning step items left-aligned for readability */
+  .triage-reasoning-col ul li {
+    text-align: left;
+  }
+}
+
+/* ── Picture 2: Hospital Cards — center all inner elements ── */
+@media (max-width: 1024px) {
+  /* Each hospital card header (#badge + name + specialty badge): stack centrally */
+  .hosp-card-header {
+    flex-direction: column !important;
+    align-items: center !important;
+    text-align: center;
+    gap: 0.5rem;
+  }
+
+  /* Badge + name block: center the flex row */
+  .hosp-name-block {
+    flex-direction: column !important;
+    align-items: center !important;
+    text-align: center;
+  }
+
+  /* Specialty Match badge and distance note: center */
+  .hosp-match-badge {
+    text-align: center !important;
+    align-self: center !important;
+    width: 100%;
+  }
+
+  /* Department chips row: center */
+  .hosp-dept-chips {
+    justify-content: center !important;
+  }
+
+  /* Department list text: center */
+  .hosp-dept-text,
+  .hosp-dept-text > div {
+    text-align: center;
+  }
+
+  /* Phone + Book Here footer: stack and center */
+  .hosp-footer-row {
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+  }
+  .hosp-footer-row > a {
+    justify-content: center;
+  }
+}
+
+/* ── Extra polish at very small screens (< 480px) ── */
+@media (max-width: 480px) {
+  /* Urgency pill: center when stacked */
+  .triage-header-row > div:last-child {
+    align-self: center;
+  }
+}
+
+
