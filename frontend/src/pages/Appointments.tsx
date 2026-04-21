@@ -175,6 +175,7 @@ export default function Appointments() {
       }
 
       const res = await fetch(`http://localhost:8002/appointments/slots?${params.toString()}`, {
+        cache: 'no-store',
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -256,6 +257,7 @@ export default function Appointments() {
 
       setStatus(`Appointment confirmed at ${slot.clinic_name} on ${formatSlotTime(slot.scheduled_at)}.`);
       setConfirmation(slot);
+      setSlots((currentSlots) => currentSlots.filter((currentSlot) => !(currentSlot.doctor_id === slot.doctor_id && currentSlot.scheduled_at === slot.scheduled_at)));
       await fetchSlots();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Booking failed.');

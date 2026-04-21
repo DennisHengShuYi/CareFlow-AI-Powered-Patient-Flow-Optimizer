@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Integer, Float, ForeignKey, DateTime, Text, Boolean, text
+from sqlalchemy import String, Integer, Float, ForeignKey, DateTime, Text, Boolean, Enum as SAEnum, text
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
@@ -35,6 +35,20 @@ AsyncSessionLocal = async_sessionmaker(
 # ---------------------------------------------------------------------------
 # ORM Models
 # ---------------------------------------------------------------------------
+APPOINTMENT_STATUS_SCHEDULED = "Scheduled"
+APPOINTMENT_STATUS_COMPLETED = "Completed"
+APPOINTMENT_STATUS_CANCELLED = "Cancelled"
+APPOINTMENT_STATUS_NO_SHOW = "No-show"
+APPOINTMENT_STATUS_RESCHEDULED = "Rescheduled"
+APPOINTMENT_STATUS_VALUES = (
+    APPOINTMENT_STATUS_SCHEDULED,
+    APPOINTMENT_STATUS_COMPLETED,
+    APPOINTMENT_STATUS_CANCELLED,
+    APPOINTMENT_STATUS_NO_SHOW,
+    APPOINTMENT_STATUS_RESCHEDULED,
+)
+
+
 class Patient(Base):
     __tablename__ = "patients"
 
@@ -147,7 +161,11 @@ class Appointment(Base):
     duration_minutes: Mapped[int] = mapped_column(Integer, default=30)
     appointment_type: Mapped[str] = mapped_column(String(100), default="consultation")
     urgency_level: Mapped[str] = mapped_column(String(10), nullable=False)
-    status: Mapped[str] = mapped_column(String(50), default="booked")
+    status: Mapped[str] = mapped_column(
+        SAEnum(*APPOINTMENT_STATUS_VALUES, name="appointment_status"),
+        default=APPOINTMENT_STATUS_SCHEDULED,
+        nullable=False,
+    )
     chief_complaint: Mapped[str] = mapped_column(Text, nullable=False)
     fhir_resource: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     confirmation_sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

@@ -20,7 +20,7 @@ from app.auth.clerk import verify_clerk_token
 from app.cache.redis_client import redis_client
 from app.config.llm_provider import llm
 from app.config.settings import settings
-from app.models.db import AsyncSessionLocal, AuditLog, IntakeLog, Session as SessionModel, Profile, Doctor, Room, Hospital, Department, Appointment
+from app.models.db import AsyncSessionLocal, AuditLog, IntakeLog, Session as SessionModel, Profile, Doctor, Room, Hospital, Department, Appointment, APPOINTMENT_STATUS_SCHEDULED
 from app.services.booking_engine import booking_engine
 from app.services.intake_pipeline import intake_pipeline
 from app.services.triage_agent import triage_agent
@@ -606,6 +606,10 @@ async def book_appointment(
         latency = int((time.time() - t0) * 1000)
         await _audit(body.session_id, "/appointments/book", body.complaint, latency, 200)
         return {"status": "confirmed", "fhir_resource": fhir}
+    except ValueError as exc:
+        latency = int((time.time() - t0) * 1000)
+        await _audit(body.session_id, "/appointments/book", body.complaint, latency, 409, str(exc))
+        raise HTTPException(status_code=409, detail=str(exc))
     except Exception as exc:
         latency = int((time.time() - t0) * 1000)
         await _audit(body.session_id, "/appointments/book", body.complaint, latency, 500, str(exc))
@@ -642,7 +646,7 @@ async def my_appointments(user: dict = Depends(verify_clerk_token)):
                     select(func.count(Appointment.id)).where(
                         and_(
                             Appointment.doctor_id == appt.doctor_id,
-                            Appointment.status == "booked",
+                            Appointment.status == APPOINTMENT_STATUS_SCHEDULED,
                             Appointment.scheduled_at < appt.scheduled_at,
                         )
                     )
@@ -653,7 +657,7 @@ async def my_appointments(user: dict = Depends(verify_clerk_token)):
                     select(func.count(Appointment.id)).where(
                         and_(
                             Appointment.doctor_id.is_(None),
-                            Appointment.status == "booked",
+                            Appointment.status == APPOINTMENT_STATUS_SCHEDULED,
                             Appointment.scheduled_at < appt.scheduled_at,
                         )
                     )
@@ -676,8 +680,8 @@ async def my_appointments(user: dict = Depends(verify_clerk_token)):
                 "live_wait_minutes": live_wait_minutes,
             }
 
-        upcoming_raw = [a for a in appointments if a.scheduled_at >= now and a.status == "booked"]
-        history_raw = [a for a in appointments if a.scheduled_at < now or a.status != "booked"]
+        upcoming_raw = [a for a in appointments if a.scheduled_at >= now and a.status == APPOINTMENT_STATUS_SCHEDULED]
+        history_raw = [a for a in appointments if a.scheduled_at < now or a.status != APPOINTMENT_STATUS_SCHEDULED]
 
         current = None
         if upcoming_raw:
