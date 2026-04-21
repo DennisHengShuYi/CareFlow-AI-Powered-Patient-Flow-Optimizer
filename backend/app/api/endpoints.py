@@ -702,6 +702,8 @@ class HospitalRecommendRequest(BaseModel):
     specialist: str = ""          # From triage.recommended_specialist
     chief_complaint: str = ""     # From triage.chief_complaint
     location: str = ""            # From user profile.location (e.g. "Miri, Sarawak")
+    latitude: float | None = None
+    longitude: float | None = None
 
 
 class NearbyFacilityRequest(BaseModel):
@@ -735,15 +737,15 @@ async def recommend_hospitals(
     # 2. Get User Coordinates (from profile or location lookup)
     uid = user_id.get("sub") if isinstance(user_id, dict) else user_id
     profile = await supabase_rest.get_profile(uid)
-    user_lat, user_lng = None, None
+    user_lat, user_lng = body.latitude, body.longitude
     
-    if profile:
+    if profile and (user_lat is None or user_lng is None):
         user_lat = profile.get("latitude")
         user_lng = profile.get("longitude")
     
     # Fallback: City lookup if coordinates are missing but location name exists
     user_loc = (profile.get("location") if profile else None) or body.location
-    if (not user_lat or not user_lng) and user_loc:
+    if (user_lat is None or user_lng is None) and user_loc:
         loc_map = {
             "miri": (4.3995, 113.9914),
             "kl": (3.1390, 101.6869),
@@ -759,6 +761,25 @@ async def recommend_hospitals(
                 break
 
     specialist_lower = body.specialist.lower()
+
+    city_coords = {
+        "miri": (4.3995, 113.9914),
+        "kl": (3.1390, 101.6869),
+        "kuala lumpur": (3.1390, 101.6869),
+        "pj": (3.1073, 101.6067),
+        "petaling jaya": (3.1073, 101.6067),
+        "cyberjaya": (2.9213, 101.6511),
+        "selangor": (3.0738, 101.5183),
+    }
+
+    def _infer_coords_from_text(text_value: str | None) -> tuple[float, float] | None:
+        if not text_value:
+            return None
+        lower = text_value.lower()
+        for token, coords in city_coords.items():
+            if token in lower:
+                return coords
+        return None
     
     def _calculate_haversine(lat1, lon1, lat2, lon2):
         R = 6371.0 # KM
@@ -816,8 +837,13 @@ async def recommend_hospitals(
         dist_km = None
         h_lat = h.get("latitude")
         h_lng = h.get("longitude")
+
+        if h_lat is None or h_lng is None:
+            inferred = _infer_coords_from_text(h.get("address") or h.get("name"))
+            if inferred:
+                h_lat, h_lng = inferred
         
-        if user_lat and user_lng and h_lat and h_lng:
+        if user_lat is not None and user_lng is not None and h_lat is not None and h_lng is not None:
             dist_km = _calculate_haversine(user_lat, user_lng, h_lat, h_lng)
 
         return {
@@ -839,10 +865,16 @@ async def recommend_hospitals(
         if res:
             candidates.append(res)
 
-    # SORT: Primarily by distance (ascending)
-    # If distance is unknown, move to end
-    candidates.sort(key=lambda x: (x["distance_km"] if x["distance_km"] is not None else 999999))
+    # Prefer nearby hospitals first when location is known.
+    NEARBY_RADIUS_KM = 120
+    if user_lat is not None and user_lng is not None:
+        nearby = [c for c in candidates if c["distance_km"] is not None and c["distance_km"] <= NEARBY_RADIUS_KM]
+        if nearby:
+            nearby.sort(key=lambda x: x["distance_km"])
+            return {"recommendations": nearby[:5]}
 
+    # Fallback to global distance sorting if no nearby matches are available.
+    candidates.sort(key=lambda x: (x["distance_km"] if x["distance_km"] is not None else 999999))
     return {"recommendations": candidates[:5]}
 
 

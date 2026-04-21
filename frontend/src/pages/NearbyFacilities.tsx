@@ -6,6 +6,7 @@ import 'leaflet/dist/leaflet.css';
 import { MapPinned, Loader2, Navigation2, Phone, LocateFixed, ListChecks } from 'lucide-react';
 import LayoutSidebar from '../components/LayoutSidebar';
 import { useProfile } from '../hooks/useProfile';
+import { useNavigate } from 'react-router-dom';
 
 type TriageContext = {
   session_id: string;
@@ -50,6 +51,12 @@ const FallbackIcons = {
     iconSize: [18, 18],
     iconAnchor: [9, 9],
   }),
+  selectedFacility: L.divIcon({
+    className: '',
+    html: '<div style="width:20px;height:20px;border-radius:50%;background:linear-gradient(135deg,#1E88E5,#42A5F5);border:3px solid white;box-shadow:0 8px 20px rgba(30,136,229,0.35);"></div>',
+    iconSize: [20, 20],
+    iconAnchor: [10, 10],
+  }),
 };
 
 function resolveFallbackCoords(location: string | null | undefined): UserCoords | null {
@@ -84,6 +91,7 @@ function MapCenter({ center }: { center: [number, number] }) {
 }
 
 export default function NearbyFacilities() {
+  const navigate = useNavigate();
   const { getToken } = useAuth();
   const { profile } = useProfile();
 
@@ -95,6 +103,28 @@ export default function NearbyFacilities() {
   const [geoError, setGeoError] = useState<string | null>(null);
   const [userCoords, setUserCoords] = useState<UserCoords | null>(null);
   const [facilities, setFacilities] = useState<NearbyFacility[]>([]);
+  const [selectedFacilityId, setSelectedFacilityId] = useState<string | null>(null);
+  const [showMap, setShowMap] = useState(false);
+
+  const handleSelectFacility = (facility: NearbyFacility) => {
+    setSelectedFacilityId(facility.id);
+
+    if (!triageContext) {
+      return;
+    }
+
+    navigate('/appointments', {
+      state: {
+        triageContext,
+        hospitalId: facility.id,
+        selectedFacility: {
+          id: facility.id,
+          name: facility.name,
+          address: facility.address,
+        },
+      },
+    });
+  };
 
   useEffect(() => {
     const cached = sessionStorage.getItem('latestTriageContext');
@@ -216,9 +246,10 @@ export default function NearbyFacilities() {
       <div className="responsive-padding" style={{ display: 'grid', gap: '1rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' }}>
           <div>
+            
             <h1 style={{ fontSize: 'var(--font-h1)', fontWeight: 800, marginBottom: '0.35rem' }}>Nearby Healthcare Facilities</h1>
             <p style={{ color: 'var(--text-muted)', maxWidth: '760px' }}>
-              Hospitals and clinics near your current location. This is a read-only map for now.
+              Hospitals and clinics near your current location. Use the list below as the primary booking path.
             </p>
           </div>
           <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
@@ -250,6 +281,110 @@ export default function NearbyFacilities() {
         )}
 
         <div className="card" style={{ display: 'grid', gap: '1rem' }}>
+          <div id="facility-list" style={{ display: 'grid', gap: '0.75rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+              <div style={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                <ListChecks size={17} color="var(--primary)" /> Nearby Facilities List
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                <button
+                  className="btn-secondary"
+                  onClick={() => setShowMap((prev) => !prev)}
+                  style={{ padding: '0.5rem 0.95rem', fontSize: '0.82rem' }}
+                  aria-expanded={showMap}
+                  aria-controls="facility-map-panel"
+                >
+                  {showMap ? 'Hide Map' : 'Show Map'}
+                </button>
+                {(loadingGeo || loadingFacilities) && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                    <Loader2 size={15} className="animate-spin" /> Locating nearby facilities...
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {loading ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', color: 'var(--text-muted)' }}>
+                <Loader2 size={16} className="animate-spin" /> Preparing facility list...
+              </div>
+            ) : facilities.length === 0 ? (
+              <div style={{ color: 'var(--text-muted)' }}>No healthcare facilities were found nearby.</div>
+            ) : (
+              <div style={{ display: 'grid', gap: '0.8rem' }}>
+                {facilities.map((facility) => {
+                  const isSelected = selectedFacilityId === facility.id;
+                  return (
+                    <div
+                      key={facility.id}
+                      style={{
+                        border: isSelected ? '2px solid var(--primary)' : '1px solid var(--neutral-400)',
+                        background: isSelected ? 'var(--primary-fixed)' : 'white',
+                        borderRadius: '14px',
+                        padding: '1rem',
+                        display: 'grid',
+                        gap: '0.85rem',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+                        <div className="facility-row-main">
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                            <div style={{ fontWeight: 800, fontSize: '1rem' }}>{facility.name}</div>
+                            <span style={{ fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '0.2rem 0.45rem', borderRadius: '999px', background: 'var(--neutral-200)', color: 'var(--text-muted)' }}>
+                              {facility.facility_type}
+                            </span>
+                            {isSelected && (
+                              <span style={{ fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '0.2rem 0.45rem', borderRadius: '999px', background: 'rgba(30,136,229,0.14)', color: 'var(--primary)' }}>
+                                Selected
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>{facility.address}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: 'var(--text-muted)', fontSize: '0.85rem', flexWrap: 'wrap' }}>
+                            <Navigation2 size={14} /> {facility.distance_note}
+                            {facility.contact_number && (
+                              <>
+                                <span>•</span>
+                                <Phone size={14} /> {facility.contact_number}
+                              </>
+                            )}
+                          </div>
+                        </div>
+                        <div className="facility-row-side" style={{ display: 'grid', gap: '0.5rem', justifyItems: 'end' }}>
+                          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                            {facility.specialty_match ? 'Matches booking filter' : 'Available for general browsing'}
+                          </div>
+                          <button
+                            className="btn-primary"
+                            style={{ padding: '0.5rem 0.95rem', fontSize: '0.82rem' }}
+                            onClick={() => handleSelectFacility(facility)}
+                          >
+                            {triageContext ? 'Use For Booking' : 'Select Facility'}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+                        {facility.matched_departments.slice(0, 4).map((dept) => (
+                          <span key={dept} style={{ background: '#e8f5e9', color: '#1b5e20', padding: '0.25rem 0.5rem', borderRadius: '999px', fontSize: '0.75rem' }}>
+                            {dept}
+                          </span>
+                        ))}
+                        {!facility.matched_departments.length && facility.all_departments.slice(0, 4).map((dept) => (
+                          <span key={dept} style={{ background: 'var(--neutral-200)', color: 'var(--text-muted)', padding: '0.25rem 0.5rem', borderRadius: '999px', fontSize: '0.75rem' }}>
+                            {dept}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {showMap && (
+            <>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', fontWeight: 800 }}>
               <MapPinned size={18} color="var(--primary)" /> Map of Nearby Facilities
@@ -259,7 +394,7 @@ export default function NearbyFacilities() {
             </div>
           </div>
 
-          <div className="facility-map">
+          <div className="facility-map" id="facility-map-panel">
             <MapContainer
               center={mapCenter}
               zoom={13}
@@ -295,97 +430,31 @@ export default function NearbyFacilities() {
                   <Marker
                     key={facility.id}
                     position={[facility.latitude as number, facility.longitude as number]}
-                    icon={FallbackIcons.facility}
+                    icon={selectedFacilityId === facility.id ? FallbackIcons.selectedFacility : FallbackIcons.facility}
+                    eventHandlers={{
+                      click: () => handleSelectFacility(facility),
+                    }}
                   >
                     <Popup>
                       <div style={{ display: 'grid', gap: '0.4rem', minWidth: '220px' }}>
                         <div style={{ fontWeight: 800 }}>{facility.name}</div>
                         <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{facility.address}</div>
                         <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{formatDistance(facility.distance_km)}</div>
+                        <button
+                          className="btn-primary"
+                          style={{ padding: '0.45rem 0.85rem', fontSize: '0.78rem' }}
+                          onClick={() => handleSelectFacility(facility)}
+                        >
+                          {triageContext ? 'Use For Booking' : 'Select Facility'}
+                        </button>
                       </div>
                     </Popup>
                   </Marker>
                 ))}
             </MapContainer>
           </div>
-
-          <div style={{ display: 'grid', gap: '0.75rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
-              <div style={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                <ListChecks size={17} color="var(--primary)" /> Nearby Facilities List
-              </div>
-              {(loadingGeo || loadingFacilities) && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                  <Loader2 size={15} className="animate-spin" /> Locating nearby facilities...
-                </div>
-              )}
-            </div>
-
-            {loading ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', color: 'var(--text-muted)' }}>
-                <Loader2 size={16} className="animate-spin" /> Preparing facility map...
-              </div>
-            ) : facilities.length === 0 ? (
-              <div style={{ color: 'var(--text-muted)' }}>No healthcare facilities were found nearby.</div>
-            ) : (
-              <div style={{ display: 'grid', gap: '0.8rem' }}>
-                {facilities.map((facility) => {
-                  return (
-                    <div
-                      key={facility.id}
-                      style={{
-                        border: '1px solid var(--neutral-400)',
-                        background: 'white',
-                        borderRadius: '14px',
-                        padding: '1rem',
-                        display: 'grid',
-                        gap: '0.85rem',
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-                        <div className="facility-row-main">
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                            <div style={{ fontWeight: 800, fontSize: '1rem' }}>{facility.name}</div>
-                            <span style={{ fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '0.2rem 0.45rem', borderRadius: '999px', background: 'var(--neutral-200)', color: 'var(--text-muted)' }}>
-                              {facility.facility_type}
-                            </span>
-                          </div>
-                          <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>{facility.address}</div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: 'var(--text-muted)', fontSize: '0.85rem', flexWrap: 'wrap' }}>
-                            <Navigation2 size={14} /> {facility.distance_note}
-                            {facility.contact_number && (
-                              <>
-                                <span>•</span>
-                                <Phone size={14} /> {facility.contact_number}
-                              </>
-                            )}
-                          </div>
-                        </div>
-                        <div className="facility-row-side">
-                          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                            {facility.specialty_match ? 'Matches booking filter' : 'Available for general browsing'}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
-                        {facility.matched_departments.slice(0, 4).map((dept) => (
-                          <span key={dept} style={{ background: '#e8f5e9', color: '#1b5e20', padding: '0.25rem 0.5rem', borderRadius: '999px', fontSize: '0.75rem' }}>
-                            {dept}
-                          </span>
-                        ))}
-                        {!facility.matched_departments.length && facility.all_departments.slice(0, 4).map((dept) => (
-                          <span key={dept} style={{ background: 'var(--neutral-200)', color: 'var(--text-muted)', padding: '0.25rem 0.5rem', borderRadius: '999px', fontSize: '0.75rem' }}>
-                            {dept}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+            </>
+          )}
         </div>
 
       </div>

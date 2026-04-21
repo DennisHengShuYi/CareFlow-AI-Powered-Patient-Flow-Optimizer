@@ -1,9 +1,17 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import LayoutSidebar from '../components/LayoutSidebar';
 import { Link } from 'react-router-dom';
 import { ShieldAlert, HeartPulse, MapPin, CheckCircle2, ChevronRight, ArrowLeft, ArrowRight, Mic, Upload, Type, Loader2, X, FileText } from 'lucide-react';
 import { useAuth } from '@clerk/clerk-react';
 import { useProfile } from '../hooks/useProfile';
+
+const TRIAGE_LOADING_STEPS = [
+  'Analyzing your symptoms...',
+  'Identifying clinical facts...',
+  'Cross-checking urgency patterns...',
+  'Preparing best care pathway...',
+  'Finalizing triage recommendation...',
+];
 
 
 export default function Intake() {
@@ -35,6 +43,26 @@ export default function Intake() {
   const { profile } = useProfile();
   const [recommendations, setRecommendations] = useState<any[]>([]);
   const [recLoading, setRecLoading] = useState(false);
+  const [userCoords, setUserCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [loadingElapsedSec, setLoadingElapsedSec] = useState(0);
+
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setUserCoords({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        });
+      },
+      () => {
+        // Geolocation denied/unavailable; backend will fall back to profile/location text.
+      },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+    );
+  }, []);
 
   const getRecognitionLanguage = () => {
     if (languagePreference === 'ms') return 'ms-MY';
@@ -56,6 +84,8 @@ export default function Intake() {
           specialist: triage.recommended_specialist || '',
           chief_complaint: triage.chief_complaint || '',
           location: profile?.location || '',
+          latitude: userCoords?.latitude ?? null,
+          longitude: userCoords?.longitude ?? null,
         })
       });
       if (!res.ok) throw new Error('Failed to fetch recommendations');
@@ -87,9 +117,37 @@ export default function Intake() {
 
   const [loadingStatus, setLoadingStatus] = useState<string>('');
 
+  useEffect(() => {
+    if (!loading) {
+      setLoadingProgress(0);
+      setLoadingElapsedSec(0);
+      return;
+    }
+
+    const startedAt = Date.now();
+    setLoadingProgress(8);
+    setLoadingStatus(TRIAGE_LOADING_STEPS[0]);
+
+    const timer = window.setInterval(() => {
+      const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
+      const stepIndex = Math.min(Math.floor(elapsedSeconds / 4), TRIAGE_LOADING_STEPS.length - 1);
+
+      setLoadingElapsedSec(elapsedSeconds);
+      setLoadingStatus(TRIAGE_LOADING_STEPS[stepIndex]);
+
+      setLoadingProgress((prev) => {
+        if (prev < 60) return Math.min(prev + 6, 95);
+        if (prev < 85) return Math.min(prev + 3, 95);
+        return Math.min(prev + 1, 95);
+      });
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [loading]);
+
   const processTriageText = async (text: string) => {
     setLoading(true);
-    setLoadingStatus('Analyzing your symptoms...');
+    setLoadingStatus(TRIAGE_LOADING_STEPS[0]);
     
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute patience
@@ -97,8 +155,6 @@ export default function Intake() {
     try {
       const token = await getToken();
       
-      // Stage 1: Extraction
-      setLoadingStatus('Identifying clinical facts...');
       const res = await fetch('http://localhost:8002/intake/text', {
         method: 'POST',
         headers: {
@@ -141,6 +197,7 @@ export default function Intake() {
       setStep(2);
       setIsFollowingUp(false);
       setFollowUpResponse('');
+      setLoadingProgress(100);
     } catch (err: any) {
       console.error(err);
       if (err.name === 'AbortError') {
@@ -360,6 +417,22 @@ export default function Intake() {
                 >
                   <X size={18} />
                 </button>
+              </div>
+            )}
+
+            {loading && (
+              <div className="triage-progress-panel">
+                <div className="triage-progress-header">
+                  <div className="triage-progress-title">
+                    <Loader2 size={15} className="animate-spin" />
+                    Triage engine is running
+                  </div>
+                  <div className="triage-progress-time">{loadingElapsedSec}s</div>
+                </div>
+                <div className="triage-progress-track">
+                  <div className="triage-progress-fill" style={{ width: `${loadingProgress}%` }} />
+                </div>
+                <div className="triage-progress-status">{loadingStatus}</div>
               </div>
             )}
 

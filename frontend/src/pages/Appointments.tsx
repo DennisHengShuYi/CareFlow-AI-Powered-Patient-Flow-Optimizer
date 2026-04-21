@@ -48,6 +48,9 @@ type LocationState = {
   };
 };
 
+const SELECTED_FACILITY_KEY = 'selectedFacility';
+const SELECTED_FACILITY_SESSION_KEY = 'selectedFacilitySessionId';
+
 function formatSlotTime(iso: string) {
   const d = new Date(iso);
   return d.toLocaleString([], {
@@ -120,23 +123,35 @@ export default function Appointments() {
 
   useEffect(() => {
     if (locationState.hospitalId) {
-      sessionStorage.setItem('selectedFacility', JSON.stringify(locationState.selectedFacility || { id: locationState.hospitalId }));
+      sessionStorage.setItem(SELECTED_FACILITY_KEY, JSON.stringify(locationState.selectedFacility || { id: locationState.hospitalId }));
+      if (ctx?.session_id) {
+        sessionStorage.setItem(SELECTED_FACILITY_SESSION_KEY, ctx.session_id);
+      }
       return;
     }
 
     if (!hospitalId) {
-      const cachedFacility = sessionStorage.getItem('selectedFacility');
+      const cachedFacility = sessionStorage.getItem(SELECTED_FACILITY_KEY);
+      const cachedSessionId = sessionStorage.getItem(SELECTED_FACILITY_SESSION_KEY);
+
+      if (ctx?.session_id && cachedSessionId && cachedSessionId !== ctx.session_id) {
+        sessionStorage.removeItem(SELECTED_FACILITY_KEY);
+        sessionStorage.removeItem(SELECTED_FACILITY_SESSION_KEY);
+        return;
+      }
+
       if (cachedFacility) {
         try {
           const parsed = JSON.parse(cachedFacility) as LocationState['selectedFacility'];
           setHospitalId(parsed?.id || null);
           setSelectedFacility(parsed || null);
         } catch {
-          sessionStorage.removeItem('selectedFacility');
+          sessionStorage.removeItem(SELECTED_FACILITY_KEY);
+          sessionStorage.removeItem(SELECTED_FACILITY_SESSION_KEY);
         }
       }
     }
-  }, [hospitalId, locationState.hospitalId, locationState.selectedFacility]);
+  }, [ctx?.session_id, hospitalId, locationState.hospitalId, locationState.selectedFacility]);
 
   const fetchSlots = async () => {
     if (!ctx?.recommended_specialist || !ctx?.urgency) {
@@ -318,7 +333,8 @@ export default function Appointments() {
                 onClick={() => {
                   setHospitalId(null);
                   setSelectedFacility(null);
-                  sessionStorage.removeItem('selectedFacility');
+                  sessionStorage.removeItem(SELECTED_FACILITY_KEY);
+                  sessionStorage.removeItem(SELECTED_FACILITY_SESSION_KEY);
                 }}
               >
                 Clear Facility Filter
