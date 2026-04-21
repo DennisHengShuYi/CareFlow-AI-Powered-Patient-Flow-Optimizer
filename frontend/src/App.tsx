@@ -15,7 +15,7 @@ import { Loader2 } from 'lucide-react';
 // A dispatcher component for the root path '/'
 function HomeDispatcher() {
   const { role, loading } = useProfile();
-  
+
   if (loading) {
     return (
       <div style={{ height: '100vh', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-gradient)' }}>
@@ -54,7 +54,7 @@ function ProtectedRoute({ children, allowedRoles }: { children: React.ReactNode,
   if (isSignedIn && !profile && !profileLoading) {
     const isAtOnboarding = window.location.pathname === '/onboarding';
     if (!isAtOnboarding) {
-       return <Navigate to="/onboarding" />;
+      return <Navigate to="/onboarding" />;
     }
   }
 
@@ -73,17 +73,17 @@ function App() {
       <Routes>
         {/* Public Routes */}
         <Route path="/landing" element={<Landing />} />
-        
+
         {/* Authentication Routes */}
-        <Route 
-          path="/sign-in/*" 
+        <Route
+          path="/sign-in/*"
           element={
             <div style={{ display: 'flex', width: '100%', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-gradient)' }}>
-              <SignIn 
-                routing="path" 
-                path="/sign-in" 
-                signUpUrl="/sign-up" 
-                forceRedirectUrl="/" 
+              <SignIn
+                routing="path"
+                path="/sign-in"
+                signUpUrl="/sign-up"
+                forceRedirectUrl="/"
                 appearance={{
                   variables: {
                     colorPrimary: '#1E88E5',
@@ -106,17 +106,17 @@ function App() {
                 }}
               />
             </div>
-          } 
+          }
         />
-        <Route 
-          path="/sign-up/*" 
+        <Route
+          path="/sign-up/*"
           element={
             <div style={{ display: 'flex', width: '100%', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-gradient)' }}>
-              <SignUp 
-                routing="path" 
-                path="/sign-up" 
-                signInUrl="/sign-in" 
-                forceRedirectUrl="/" 
+              <SignUp
+                routing="path"
+                path="/sign-up"
+                signInUrl="/sign-in"
+                forceRedirectUrl="/"
                 appearance={{
                   variables: {
                     colorPrimary: '#1E88E5',
@@ -139,23 +139,23 @@ function App() {
                 }}
               />
             </div>
-          } 
+          }
         />
 
         {/* Application Routes - Wrapped in ProtectedRoute to enforce login and roles */}
         <Route path="/onboarding" element={<ProtectedRoute><Onboarding /></ProtectedRoute>} />
-        
+
         {/* Hospital Staff Routes */}
         <Route path="/" element={<ProtectedRoute allowedRoles={['hospital_staff']}><HomeDispatcher /></ProtectedRoute>} />
         <Route path="/claims" element={<ProtectedRoute allowedRoles={['hospital_staff']}><Claims /></ProtectedRoute>} />
-        
+
         {/* Patient Routes */}
         <Route path="/intake" element={<ProtectedRoute allowedRoles={['patient']}><Intake /></ProtectedRoute>} />
         <Route path="/departments" element={<ProtectedRoute allowedRoles={['hospital_staff']}><Departments /></ProtectedRoute>} />
         <Route path="/nearby-facilities" element={<ProtectedRoute allowedRoles={['patient']}><NearbyFacilities /></ProtectedRoute>} />
         <Route path="/appointments" element={<ProtectedRoute allowedRoles={['patient']}><Appointments /></ProtectedRoute>} />
-        <Route path="/my-appointments" element={<ProtectedRoute allowedRoles={['patient']}><MyAppointments /></ProtectedRoute>} />
-        
+        <Route path="/my-bookings" element={<ProtectedRoute allowedRoles={['patient']}><MyAppointments /></ProtectedRoute>} />
+
         {/* Fallback */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

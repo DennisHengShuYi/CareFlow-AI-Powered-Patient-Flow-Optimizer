@@ -20,6 +20,7 @@ from app.models.db import (
     Doctor,
     Hospital,
     Department,
+    Room,
     Profile,
 )
 
@@ -503,6 +504,8 @@ class BookingEngine:
             result = await session.execute(stmt)
             rows = result.all() # list of (Doctor, Hospital, Department) tuples
             hospital_schedule_cache: dict[str, tuple[clock_time, clock_time, set[int]]] = {}
+            # Cache for lowest usage room in each department
+            dept_best_room_cache: dict[uuid.UUID, str] = {}
 
             canonical_specialty = self._canonical_department(specialty)
             wait_minutes = _PRIMARY_CARE_WAIT_MINUTES.get(canonical_specialty)
@@ -543,6 +546,16 @@ class BookingEngine:
                     while candidate <= hospital_cutoff and len(slots) < max_slots:
                         if candidate > now and candidate not in booked_times:
                             est_wait = max(0, int((candidate - now).total_seconds() // 60))
+                            if doc.department_id not in dept_best_room_cache:
+                                room_q = await session.execute(
+                                    select(Room.label)
+                                    .where(Room.department_id == doc.department_id)
+                                    .order_by(Room.usage_minutes.asc())
+                                    .limit(1)
+                                )
+                                best_room = room_q.scalar_one_or_none()
+                                dept_best_room_cache[doc.department_id] = best_room or "Auto-assigned"
+                            
                             slots.append({
                                 "doctor_id": str(doc.id),
                                 "hospital_id": str(hosp.id),
@@ -555,6 +568,7 @@ class BookingEngine:
                                 "specialty_match": True,
                                 "service_mode": "wait_time",
                                 "estimated_wait_minutes": est_wait,
+                                "room_label": dept_best_room_cache.get(doc.department_id)
                             })
                         candidate = candidate + timedelta(minutes=30)
                         candidate = self._advance_into_open_hours(candidate, open_time, close_time, open_days, 30)
@@ -572,6 +586,16 @@ class BookingEngine:
                     while candidate <= hospital_cutoff and len(slots) < max_slots:
                         if candidate > now and candidate not in booked_times:
                             est_wait = max(0, int((candidate - now).total_seconds() // 60))
+                            if doc.department_id not in dept_best_room_cache:
+                                room_q = await session.execute(
+                                    select(Room.label)
+                                    .where(Room.department_id == doc.department_id)
+                                    .order_by(Room.usage_minutes.asc())
+                                    .limit(1)
+                                )
+                                best_room = room_q.scalar_one_or_none()
+                                dept_best_room_cache[doc.department_id] = best_room or "Auto-assigned"
+
                             slots.append({
                                 "doctor_id": str(doc.id),
                                 "hospital_id": str(hosp.id),
@@ -584,6 +608,7 @@ class BookingEngine:
                                 "specialty_match": True,
                                 "service_mode": "priority",
                                 "estimated_wait_minutes": est_wait,
+                                "room_label": dept_best_room_cache.get(doc.department_id)
                             })
                         candidate = candidate + timedelta(minutes=30)
                         candidate = self._advance_into_open_hours(candidate, open_time, close_time, open_days, 30)
@@ -603,6 +628,16 @@ class BookingEngine:
                     if candidate > hospital_cutoff:
                         break
                     if candidate > now and candidate not in booked_times:
+                        if doc.department_id not in dept_best_room_cache:
+                            room_q = await session.execute(
+                                select(Room.label)
+                                .where(Room.department_id == doc.department_id)
+                                .order_by(Room.usage_minutes.asc())
+                                .limit(1)
+                            )
+                            best_room = room_q.scalar_one_or_none()
+                            dept_best_room_cache[doc.department_id] = best_room or "Auto-assigned"
+
                         slots.append({
                             "doctor_id": str(doc.id),
                             "hospital_id": str(hosp.id),
@@ -615,6 +650,7 @@ class BookingEngine:
                             "specialty_match": True,
                             "service_mode": "standard",
                             "estimated_wait_minutes": None,
+                            "room_label": dept_best_room_cache.get(doc.department_id)
                         })
                     cursor = candidate + timedelta(minutes=interval_minutes)
 
@@ -663,6 +699,22 @@ class BookingEngine:
                         if (str(hosp.id), candidate) in queue_booked_times:
                             continue
                         est = max(0, int((candidate - now).total_seconds() // 60))
+                        # Find best room for this department/specialty
+                        # Note: specialty here might be a generic string, we try to match it to a department
+                        best_room_label = "Auto-assigned"
+                        dept_q = await session.execute(
+                            select(Department.id).where(Department.hospital_id == hosp.id).limit(1)
+                        )
+                        first_dept_id = dept_q.scalar_one_or_none()
+                        if first_dept_id:
+                            room_q = await session.execute(
+                                select(Room.label)
+                                .where(Room.department_id == first_dept_id)
+                                .order_by(Room.usage_minutes.asc())
+                                .limit(1)
+                            )
+                            best_room_label = room_q.scalar_one_or_none() or "Auto-assigned"
+
                         slots.append({
                             "doctor_id": "",
                             "hospital_id": str(hosp.id),
@@ -676,6 +728,7 @@ class BookingEngine:
                             "service_mode": "wait_time",
                             "estimated_wait_minutes": est,
                             "booking_mode": "department_queue",
+                            "room_label": best_room_label
                         })
                     else:
                         priority = specialist_priorities[min(idx, len(specialist_priorities) - 1)]
@@ -688,6 +741,21 @@ class BookingEngine:
                         if (str(hosp.id), candidate) in queue_booked_times:
                             continue
                         est = max(0, int((candidate - now).total_seconds() // 60))
+                        # Find best room
+                        best_room_label = "Auto-assigned"
+                        dept_q = await session.execute(
+                            select(Department.id).where(Department.hospital_id == hosp.id).limit(1)
+                        )
+                        first_dept_id = dept_q.scalar_one_or_none()
+                        if first_dept_id:
+                            room_q = await session.execute(
+                                select(Room.label)
+                                .where(Room.department_id == first_dept_id)
+                                .order_by(Room.usage_minutes.asc())
+                                .limit(1)
+                            )
+                            best_room_label = room_q.scalar_one_or_none() or "Auto-assigned"
+
                         slots.append({
                             "doctor_id": "",
                             "hospital_id": str(hosp.id),
@@ -701,6 +769,7 @@ class BookingEngine:
                             "service_mode": "priority",
                             "estimated_wait_minutes": est,
                             "booking_mode": "department_queue",
+                            "room_label": best_room_label
                         })
 
                     if len(slots) >= max_slots:

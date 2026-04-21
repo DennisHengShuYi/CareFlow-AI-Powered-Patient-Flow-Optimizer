@@ -23,6 +23,7 @@ type Slot = {
   specialty_match: boolean;
   service_mode?: string;
   estimated_wait_minutes?: number | null;
+  room_label?: string | null;
 };
 
 type PreferredWindow = 'any' | 'morning' | 'afternoon';
@@ -63,6 +64,23 @@ function formatSlotTime(iso: string) {
   });
 }
 
+const slotChipStyles = `
+  .slot-chip:hover {
+    border-color: var(--primary) !important;
+    background: #f0f7ff !important;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(30, 136, 229, 0.15);
+  }
+  .slot-chip:active {
+    transform: translateY(0);
+  }
+  .slot-chip.loading {
+    opacity: 0.7;
+    cursor: wait;
+    border-color: var(--primary) !important;
+  }
+`;
+
 export default function Appointments() {
   const navigate = useNavigate();
   const { getToken } = useAuth();
@@ -82,32 +100,53 @@ export default function Appointments() {
   const [queueThreshold, setQueueThreshold] = useState<number | null>(null);
   const [nearbyFacilities, setNearbyFacilities] = useState<NearbyFacility[]>([]);
   const [preferredWindow, setPreferredWindow] = useState<PreferredWindow>('any');
+  const [confirmingSlot, setConfirmingSlot] = useState<Slot | null>(null);
 
   const canQuery = useMemo(() => {
     return Boolean(ctx?.recommended_specialist && ctx?.urgency);
   }, [ctx]);
 
   const groupedSlots = useMemo(() => {
-    const ordered = [...slots].sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
-    const byDate = new Map<string, Slot[]>();
+    // 1. Group by Facility (Hospital/Clinic)
+    const byFacility = new Map<string, { name: string; address: string; dates: Map<string, Slot[]> }>();
 
-    ordered.forEach((slot) => {
+    slots.forEach((slot) => {
+      const facilityId = slot.hospital_id;
+      if (!byFacility.has(facilityId)) {
+        byFacility.set(facilityId, {
+          name: slot.clinic_name,
+          address: slot.clinic_address,
+          dates: new Map<string, Slot[]>(),
+        });
+      }
+
       const d = new Date(slot.scheduled_at);
-      const key = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
-      const list = byDate.get(key) || [];
-      list.push(slot);
-      byDate.set(key, list);
+      const dateKey = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+      const facility = byFacility.get(facilityId)!;
+      const dateList = facility.dates.get(dateKey) || [];
+      dateList.push(slot);
+      facility.dates.set(dateKey, dateList);
     });
 
-    return Array.from(byDate.entries()).map(([key, daySlots]) => {
-      const date = new Date(daySlots[0].scheduled_at);
-      const label = date.toLocaleDateString([], {
-        weekday: 'long',
-        day: '2-digit',
-        month: 'short',
-      });
-      return { key, label, slots: daySlots };
-    });
+    // 2. Convert to sorted array for rendering
+    return Array.from(byFacility.values()).map((facility) => ({
+      ...facility,
+      sortedDates: Array.from(facility.dates.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, daySlots]) => {
+          const date = new Date(daySlots[0].scheduled_at);
+          const label = date.toLocaleDateString([], {
+            weekday: 'short',
+            day: '2-digit',
+            month: 'short',
+          });
+          return {
+            key,
+            label,
+            slots: daySlots.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime()),
+          };
+        }),
+    }));
   }, [slots]);
 
   useEffect(() => {
@@ -269,6 +308,7 @@ export default function Appointments() {
 
   return (
     <LayoutSidebar>
+      <style>{slotChipStyles}</style>
       <div className="responsive-padding" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
         <div>
           <h1 style={{ fontSize: 'var(--font-h1)', fontWeight: 800, marginBottom: '0.4rem' }}>Live Appointments</h1>
@@ -403,41 +443,120 @@ export default function Appointments() {
           ) : slots.length === 0 ? (
             <div style={{ color: 'var(--text-muted)' }}>No live slots found for the suggested department yet.</div>
           ) : (
-            <div style={{ display: 'grid', gap: '0.75rem' }}>
-              {groupedSlots.map((group) => (
-                <div key={group.key} style={{ display: 'grid', gap: '0.75rem' }}>
-                  <div style={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--text-muted)' }}>{group.label}</div>
-                  {group.slots.map((slot) => {
-                    const slotId = `${slot.doctor_id || 'queue'}|${slot.hospital_id}|${slot.scheduled_at}`;
-                    const booking = bookingSlotId === slotId;
-                    return (
-                      <div key={slotId} className="appt-slot-card">
-                        <div className="appt-slot-main">
-                          <div style={{ fontWeight: 700 }}>{slot.clinic_name}</div>
-                          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>{slot.clinic_address}</div>
-                          <div style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>Department: <strong>{slot.department_name || 'N/A'}</strong></div>
+            <div style={{ display: 'grid', gap: '1.5rem' }}>
+              {groupedSlots.map((facility) => (
+                <div key={facility.name} className="appt-facility-group">
+                  <div style={{ marginBottom: '1rem', borderBottom: '1px solid var(--neutral-400)', paddingBottom: '0.5rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 800, fontSize: '1.05rem', color: 'var(--secondary)' }}>
+                      <MapPin size={18} /> {facility.name}
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginLeft: '1.5rem' }}>{facility.address}</div>
+                  </div>
+
+                  <div style={{ display: 'grid', gap: '1rem' }}>
+                    {facility.sortedDates.map((dateGroup) => (
+                      <div key={dateGroup.key}>
+                        <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.02rem' }}>
+                          {dateGroup.label}
                         </div>
-                        <div className="appt-slot-side">
-                          <div style={{ fontWeight: 700 }}>{formatSlotTime(slot.scheduled_at)}</div>
-                          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{slot.duration_minutes} min</div>
-                          {slot.estimated_wait_minutes != null && (
-                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                              Wait: {slot.estimated_wait_minutes} min
-                            </div>
-                          )}
-                          <button className="btn-primary" onClick={() => bookSlot(slot)} disabled={booking || !ctx}>
-                            {booking ? 'Booking...' : 'Book This Slot'}
-                          </button>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem' }}>
+                          {dateGroup.slots.map((slot) => {
+                            const slotId = `${slot.doctor_id || 'queue'}|${slot.hospital_id}|${slot.scheduled_at}`;
+                            const booking = bookingSlotId === slotId;
+                            
+                            return (
+                              <button
+                                key={slotId}
+                                className={`slot-chip ${booking ? 'loading' : ''}`}
+                                onClick={() => setConfirmingSlot(slot)}
+                                disabled={booking || !ctx}
+                                style={{
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  alignItems: 'center',
+                                  gap: '0.2rem',
+                                  padding: '0.6rem 0.8rem',
+                                  minWidth: '90px',
+                                  background: 'white',
+                                  border: '1.5px solid var(--neutral-400)',
+                                  borderRadius: '12px',
+                                  transition: 'all 0.2s',
+                                  cursor: 'pointer',
+                                  textAlign: 'center'
+                                }}
+                              >
+                                  <div style={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--primary)' }}>
+                                    {formatSlotTime(slot.scheduled_at).split(',').pop()?.trim()}
+                                  </div>
+                                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                                    {slot.duration_minutes}m • {slot.estimated_wait_minutes ?? 0}m wait
+                                  </div>
+                                  {slot.room_label && (
+                                    <div style={{ fontSize: '0.7rem', color: 'var(--secondary)', fontWeight: 700, marginTop: '0.1rem' }}>
+                                      {slot.room_label}
+                                    </div>
+                                  )}
+                                  {booking && <div style={{ fontSize: '0.65rem', color: 'var(--primary)', fontWeight: 700 }}>Booking...</div>}
+                                </button>
+                            );
+                          })}
                         </div>
                       </div>
-                    );
-                  })}
+                    ))}
+                  </div>
                 </div>
               ))}
             </div>
           )}
         </div>
       </div>
+
+      {confirmingSlot && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+            padding: '1rem',
+          }}
+        >
+          <div className="card shadow-lg" style={{ width: '100%', maxWidth: '480px', animation: 'scaleUp 0.3s ease-out' }}>
+            <h3 style={{ marginBottom: '1rem', fontWeight: 800 }}>Confirm Appointment</h3>
+            <p style={{ color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
+              Are you sure you want to book this slot? Once confirmed, your appointment will be scheduled.
+            </p>
+            <div style={{ background: '#f5f9ff', borderRadius: '12px', padding: '1rem', marginBottom: '1.5rem', border: '1px solid #e0eaff' }}>
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Location</div>
+              <div style={{ fontWeight: 700, marginBottom: '0.5rem' }}>{confirmingSlot.clinic_name}</div>
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Date & Time</div>
+              <div style={{ fontWeight: 700 }}>{formatSlotTime(confirmingSlot.scheduled_at)}</div>
+            </div>
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+              <button
+                className="btn-secondary"
+                onClick={() => setConfirmingSlot(null)}
+                style={{ padding: '0.6rem 1.25rem' }}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn-primary"
+                onClick={() => {
+                  bookSlot(confirmingSlot);
+                  setConfirmingSlot(null);
+                }}
+                style={{ padding: '0.6rem 2rem' }}
+              >
+                Book Now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {confirmation && (
         <div

@@ -695,7 +695,7 @@ async def book_appointment(
 async def my_appointments(user: dict = Depends(verify_clerk_token)):
     """Return current/upcoming/history appointments for the signed-in patient."""
     clerk_id = user.get("sub") if isinstance(user, dict) else str(user)
-    now = datetime.utcnow().replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
 
     async with AsyncSessionLocal() as db:
         patient_res = await db.execute(
@@ -708,13 +708,14 @@ async def my_appointments(user: dict = Depends(verify_clerk_token)):
         patient_id = patient_row[0]
 
         appt_res = await db.execute(
-            select(Appointment)
+            select(Appointment, Hospital.name)
+            .join(Hospital, Appointment.hospital_id == Hospital.id)
             .where(Appointment.patient_id == patient_id)
             .order_by(Appointment.scheduled_at.desc())
         )
-        appointments = appt_res.scalars().all()
+        appointment_rows = appt_res.all()
 
-        async def enrich(appt: Appointment):
+        async def enrich(appt: Appointment, hosp_name: str):
             people_before = 0
             if appt.doctor_id:
                 queue_res = await db.execute(
@@ -739,7 +740,11 @@ async def my_appointments(user: dict = Depends(verify_clerk_token)):
                 )
                 people_before = int(queue_res.scalar() or 0)
 
-            wait_from_time = max(0, int((appt.scheduled_at - now).total_seconds() // 60))
+            appt_at = appt.scheduled_at
+            if appt_at.tzinfo is None:
+                appt_at = appt_at.replace(tzinfo=timezone.utc)
+
+            wait_from_time = max(0, int((appt_at - now).total_seconds() // 60))
             live_wait_minutes = wait_from_time + (people_before * int(appt.duration_minutes or 30))
 
             # Fetch room label if assigned
@@ -764,18 +769,19 @@ async def my_appointments(user: dict = Depends(verify_clerk_token)):
                 "room_label": room_label,
                 "people_before": people_before,
                 "live_wait_minutes": live_wait_minutes,
+                "hospital_name": hosp_name,
             }
 
-        upcoming_raw = [a for a in appointments if a.scheduled_at >= now and a.status == APPOINTMENT_STATUS_SCHEDULED]
-        history_raw = [a for a in appointments if a.scheduled_at < now or a.status != APPOINTMENT_STATUS_SCHEDULED]
+        upcoming_raw = [r for r in appointment_rows if r[0].scheduled_at.replace(tzinfo=timezone.utc if r[0].scheduled_at.tzinfo is None else r[0].scheduled_at.tzinfo) >= now and r[0].status == APPOINTMENT_STATUS_SCHEDULED]
+        history_raw = [r for r in appointment_rows if r[0].scheduled_at.replace(tzinfo=timezone.utc if r[0].scheduled_at.tzinfo is None else r[0].scheduled_at.tzinfo) < now or r[0].status != APPOINTMENT_STATUS_SCHEDULED]
 
         current = None
         if upcoming_raw:
-            nearest = sorted(upcoming_raw, key=lambda a: a.scheduled_at)[0]
-            current = await enrich(nearest)
+            nearest = sorted(upcoming_raw, key=lambda r: r[0].scheduled_at)[0]
+            current = await enrich(nearest[0], nearest[1])
 
-        upcoming = [await enrich(a) for a in sorted(upcoming_raw, key=lambda x: x.scheduled_at)]
-        history = [await enrich(a) for a in history_raw]
+        upcoming = [await enrich(r[0], r[1]) for r in sorted(upcoming_raw, key=lambda x: x[0].scheduled_at)]
+        history = [await enrich(r[0], r[1]) for r in history_raw]
 
         return {
             "current": current,

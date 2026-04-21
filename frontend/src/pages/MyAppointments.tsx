@@ -15,6 +15,7 @@ type AppointmentItem = {
   room_label: string | null;
   people_before: number;
   live_wait_minutes: number;
+  hospital_name: string;
 };
 
 type MyAppointmentsResponse = {
@@ -42,6 +43,7 @@ function ItemCard({ item, showMeta = true }: { item: AppointmentItem; showMeta?:
         <div style={{ fontWeight: 700 }}>{fmt(item.scheduled_at)}</div>
         <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--primary)' }}>Urgency {item.urgency}</div>
       </div>
+      <div style={{ fontSize: '0.88rem' }}><strong>Facility:</strong> {item.hospital_name}</div>
       <div style={{ fontSize: '0.88rem' }}><strong>Complaint:</strong> {item.chief_complaint}</div>
       {item.room_label && (
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', background: 'var(--neutral-200)', borderRadius: '8px', padding: '0.2rem 0.6rem', fontSize: '0.8rem', fontWeight: 600, color: 'var(--secondary)', width: 'fit-content' }}>
