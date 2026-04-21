@@ -3,10 +3,12 @@ Appointment booking engine.
 Maps P1-P4 urgency to booking windows, queries providers, and
 serialises confirmed appointments as FHIR R4 resources.
 """
+import json
 import uuid
 import re
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import datetime, timedelta, time as clock_time
+from typing import Optional, Literal
+from datetime import timezone
 
 from sqlalchemy import select, and_, text
 
@@ -97,14 +99,215 @@ _URGENCY_BASE_MINUTES: dict[str, int] = {
     "P4": 70,
 }
 
+_APP_TZ = timezone(timedelta(hours=8))
+
 
 class BookingEngine:
+    _DEFAULT_OPEN_TIME = clock_time(9, 0)
+    _DEFAULT_CLOSE_TIME = clock_time(17, 0)
+    _DEFAULT_OPEN_WEEKDAYS = {0, 1, 2, 3, 4, 5}
 
     @staticmethod
     def _norm(text: str | None) -> str:
         if not text:
             return ""
         return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", text.lower())).strip()
+
+    @staticmethod
+    def _parse_time_value(raw_value: object) -> clock_time | None:
+        if raw_value is None:
+            return None
+        if isinstance(raw_value, clock_time):
+            return raw_value.replace(tzinfo=None)
+        if isinstance(raw_value, datetime):
+            return raw_value.time().replace(tzinfo=None)
+        if isinstance(raw_value, str):
+            text_value = raw_value.strip()
+            if not text_value:
+                return None
+            if len(text_value) <= 5 and ":" in text_value:
+                text_value = f"{text_value}:00" if text_value.count(":") == 1 else text_value
+            try:
+                return datetime.fromisoformat(f"2000-01-01T{text_value}").time()
+            except ValueError:
+                return None
+        return None
+
+    @staticmethod
+    def _parse_days_value(raw_value: object) -> set[int] | None:
+        if raw_value is None:
+            return None
+
+        day_lookup = {
+            "mon": 0,
+            "monday": 0,
+            "tue": 1,
+            "tues": 1,
+            "tuesday": 1,
+            "wed": 2,
+            "wednesday": 2,
+            "thu": 3,
+            "thur": 3,
+            "thurs": 3,
+            "thursday": 3,
+            "fri": 4,
+            "friday": 4,
+            "sat": 5,
+            "saturday": 5,
+            "sun": 6,
+            "sunday": 6,
+        }
+
+        values: list[object]
+        if isinstance(raw_value, str):
+            text_value = raw_value.strip()
+            if not text_value:
+                return None
+            try:
+                parsed = json.loads(text_value)
+                values = parsed if isinstance(parsed, list) else [parsed]
+            except json.JSONDecodeError:
+                values = [part.strip() for part in text_value.split(",") if part.strip()]
+        elif isinstance(raw_value, (list, tuple, set)):
+            values = list(raw_value)
+        else:
+            values = [raw_value]
+
+        days: set[int] = set()
+        for item in values:
+            if isinstance(item, int):
+                if 0 <= item <= 6:
+                    days.add(item)
+                elif 1 <= item <= 7:
+                    days.add(item - 1 if item < 7 else 6)
+                continue
+            if isinstance(item, str):
+                normalized = item.strip().lower()
+                if not normalized:
+                    continue
+                if normalized.isdigit():
+                    number = int(normalized)
+                    if 0 <= number <= 6:
+                        days.add(number)
+                    elif 1 <= number <= 7:
+                        days.add(number - 1 if number < 7 else 6)
+                    continue
+                if normalized in day_lookup:
+                    days.add(day_lookup[normalized])
+
+        return days or None
+
+    @staticmethod
+    def _round_up_to_interval(value: datetime, interval_minutes: int = 30) -> datetime:
+        remainder = value.minute % interval_minutes
+        if remainder == 0 and value.second == 0 and value.microsecond == 0:
+            return value.replace(second=0, microsecond=0)
+
+        delta_minutes = interval_minutes - remainder
+        rounded = value + timedelta(minutes=delta_minutes)
+        return rounded.replace(second=0, microsecond=0)
+
+    @staticmethod
+    def _to_app_tz(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=_APP_TZ)
+        return value.astimezone(_APP_TZ)
+
+    async def _get_hospital_operating_window(
+        self,
+        session,
+        hospital_id: uuid.UUID,
+    ) -> tuple[clock_time, clock_time, set[int]]:
+        columns_result = await session.execute(
+            text(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'hospitals'
+                """
+            )
+        )
+        hospital_columns = {row[0] for row in columns_result}
+
+        candidate_columns = ["open_time", "opening_time", "start_time", "close_time", "closing_time", "end_time", "operating_hours", "operating_days", "business_days"]
+        selected_columns = ["id"] + [column for column in candidate_columns if column in hospital_columns]
+
+        if len(selected_columns) == 1:
+            return self._DEFAULT_OPEN_TIME, self._DEFAULT_CLOSE_TIME, self._DEFAULT_OPEN_WEEKDAYS
+
+        hospital_result = await session.execute(
+            text(f"SELECT {', '.join(selected_columns)} FROM hospitals WHERE id = :hid LIMIT 1"),
+            {"hid": hospital_id},
+        )
+        row = hospital_result.mappings().first()
+        if not row:
+            return self._DEFAULT_OPEN_TIME, self._DEFAULT_CLOSE_TIME, self._DEFAULT_OPEN_WEEKDAYS
+
+        operating_hours = row.get("operating_hours")
+        open_value = row.get("open_time") or row.get("opening_time") or row.get("start_time")
+        close_value = row.get("close_time") or row.get("closing_time") or row.get("end_time")
+        days_value = row.get("operating_days") or row.get("business_days")
+
+        if isinstance(operating_hours, str):
+            try:
+                operating_hours = json.loads(operating_hours)
+            except json.JSONDecodeError:
+                operating_hours = None
+
+        if isinstance(operating_hours, dict):
+            open_value = open_value or operating_hours.get("open") or operating_hours.get("start")
+            close_value = close_value or operating_hours.get("close") or operating_hours.get("end")
+            days_value = days_value or operating_hours.get("days")
+
+        open_time = self._parse_time_value(open_value) or self._DEFAULT_OPEN_TIME
+        close_time = self._parse_time_value(close_value) or self._DEFAULT_CLOSE_TIME
+        open_days = self._parse_days_value(days_value) or self._DEFAULT_OPEN_WEEKDAYS
+
+        if close_time <= open_time:
+            close_time = self._DEFAULT_CLOSE_TIME
+
+        return open_time, close_time, open_days
+
+    @staticmethod
+    def _advance_into_open_hours(
+        candidate: datetime,
+        open_time: clock_time,
+        close_time: clock_time,
+        open_days: set[int],
+        interval_minutes: int = 30,
+    ) -> datetime:
+        while True:
+            if candidate.weekday() not in open_days:
+                next_day = candidate.date() + timedelta(days=1)
+                candidate = datetime.combine(next_day, open_time, tzinfo=candidate.tzinfo)
+                candidate = BookingEngine._round_up_to_interval(candidate, interval_minutes)
+                continue
+
+            day_open = datetime.combine(candidate.date(), open_time, tzinfo=candidate.tzinfo)
+            day_close = datetime.combine(candidate.date(), close_time, tzinfo=candidate.tzinfo)
+
+            if candidate < day_open:
+                candidate = BookingEngine._round_up_to_interval(day_open, interval_minutes)
+                continue
+
+            if candidate > day_close:
+                next_day = candidate.date() + timedelta(days=1)
+                candidate = datetime.combine(next_day, open_time, tzinfo=candidate.tzinfo)
+                candidate = BookingEngine._round_up_to_interval(candidate, interval_minutes)
+                continue
+
+            return candidate
+
+    @staticmethod
+    def _hospital_cutoff(
+        now: datetime,
+        close_time: clock_time,
+        days_window: int,
+    ) -> datetime:
+        target_date = now.date() + timedelta(days=max(days_window, 0))
+        cutoff = datetime.combine(target_date, close_time, tzinfo=now.tzinfo)
+        return max(cutoff, now)
 
     @classmethod
     def _matches_specialty(
@@ -211,22 +414,49 @@ class BookingEngine:
         if existing.first():
             return
 
-        await session.execute(
+        columns_result = await session.execute(
             text(
                 """
-                INSERT INTO sessions (id, patient_id, urgency_level, status, intake_channel, follow_up_count, conversation_history)
-                VALUES (:id, :patient_id, :urgency_level, :status, :intake_channel, :follow_up_count, :conversation_history::jsonb)
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'sessions'
+                """
+            )
+        )
+        session_columns = {row[0] for row in columns_result}
+
+        field_values = {
+            "id": session_id,
+            "patient_id": patient_id,
+            "urgency_level": urgency,
+            "status": "active",
+            "follow_up_count": 0,
+            "conversation_history": json.dumps([]),
+            "intake_channel": "text",
+        }
+
+        insert_columns: list[str] = []
+        insert_values: list[str] = []
+        parameters: dict[str, object] = {}
+        for column_name, value in field_values.items():
+            if column_name not in session_columns:
+                continue
+            insert_columns.append(column_name)
+            if column_name == "conversation_history":
+                insert_values.append("CAST(:conversation_history AS jsonb)")
+            else:
+                insert_values.append(f":{column_name}")
+            parameters[column_name] = value
+
+        await session.execute(
+            text(
+                f"""
+                INSERT INTO sessions ({', '.join(insert_columns)})
+                VALUES ({', '.join(insert_values)})
                 """
             ),
-            {
-                "id": session_id,
-                "patient_id": patient_id,
-                "urgency_level": urgency,
-                "status": "active",
-                "intake_channel": "text",
-                "follow_up_count": 0,
-                "conversation_history": "[]",
-            },
+            parameters,
         )
 
     async def get_available_slots(
@@ -234,15 +464,17 @@ class BookingEngine:
         specialty: str,
         urgency: str,
         hospital_id: str | None = None,
+        limit: int = 12,
+        preferred_window: Literal["any", "morning", "afternoon"] = "any",
     ) -> list[dict]:
         """
-        Return top-3 available slots for providers matching the specialty.
+        Return available slots for providers matching the specialty.
         Slots are computed from provider.slot_templates JSONB against existing
         appointments rows to detect conflicts.
         """
+        max_slots = max(3, min(limit, 24))
         days_window = _URGENCY_DAYS.get(urgency, 7)
-        now = datetime.now(timezone.utc)
-        cutoff = now + timedelta(days=days_window)
+        now = datetime.now(_APP_TZ)
 
         slots: list[dict] = []
 
@@ -261,6 +493,7 @@ class BookingEngine:
                 stmt = stmt.where(Hospital.id == uuid.UUID(hospital_id))
             result = await session.execute(stmt)
             rows = result.all() # list of (Doctor, Hospital, Department) tuples
+            hospital_schedule_cache: dict[str, tuple[clock_time, clock_time, set[int]]] = {}
 
             canonical_specialty = self._canonical_department(specialty)
             wait_minutes = _PRIMARY_CARE_WAIT_MINUTES.get(canonical_specialty)
@@ -276,23 +509,35 @@ class BookingEngine:
                 ):
                     continue
 
+                schedule_key = str(hosp.id)
+                if schedule_key not in hospital_schedule_cache:
+                    hospital_schedule_cache[schedule_key] = await self._get_hospital_operating_window(session, hosp.id)
+                open_time, close_time, open_days = hospital_schedule_cache[schedule_key]
+                hospital_cutoff = self._hospital_cutoff(now, close_time, days_window)
+
                 if wait_minutes is not None:
                     # Temporary hardcoded primary-care wait-time mode.
-                    candidate = now + timedelta(minutes=wait_minutes + len(slots) * 5)
-                    slots.append({
-                        "doctor_id": str(doc.id),
-                        "hospital_id": str(hosp.id),
-                        "clinic_name": hosp.name,
-                        "clinic_address": hosp.address or "Contact Hospital",
-                        "department_name": dept.name,
-                        "scheduled_at": candidate.isoformat(),
-                        "duration_minutes": 20,
-                        "urgency": urgency,
-                        "specialty_match": True,
-                        "service_mode": "wait_time",
-                        "estimated_wait_minutes": wait_minutes,
-                    })
-                    if len(slots) >= 3:
+                    candidate = now + timedelta(minutes=wait_minutes)
+                    candidate = self._round_up_to_interval(candidate, 30)
+                    candidate = self._advance_into_open_hours(candidate, open_time, close_time, open_days, 30)
+                    while candidate <= hospital_cutoff and len(slots) < max_slots:
+                        est_wait = max(0, int((candidate - now).total_seconds() // 60))
+                        slots.append({
+                            "doctor_id": str(doc.id),
+                            "hospital_id": str(hosp.id),
+                            "clinic_name": hosp.name,
+                            "clinic_address": hosp.address or "Contact Hospital",
+                            "department_name": dept.name,
+                            "scheduled_at": candidate.isoformat(),
+                            "duration_minutes": 30,
+                            "urgency": urgency,
+                            "specialty_match": True,
+                            "service_mode": "wait_time",
+                            "estimated_wait_minutes": est_wait,
+                        })
+                        candidate = candidate + timedelta(minutes=30)
+                        candidate = self._advance_into_open_hours(candidate, open_time, close_time, open_days, 30)
+                    if len(slots) >= max_slots:
                         break
                     continue
 
@@ -300,29 +545,33 @@ class BookingEngine:
                     # Temporary hardcoded specialist priority mode.
                     priority = specialist_priorities[min(len(slots), len(specialist_priorities) - 1)]
                     priority_offset = 0 if priority == "CRITICAL" else 10 if priority == "URGENT" else 25
-                    candidate = now + timedelta(minutes=urgency_base + priority_offset + len(slots) * 10)
-                    slots.append({
-                        "doctor_id": str(doc.id),
-                        "hospital_id": str(hosp.id),
-                        "clinic_name": hosp.name,
-                        "clinic_address": hosp.address or "Contact Hospital",
-                        "department_name": dept.name,
-                        "scheduled_at": candidate.isoformat(),
-                        "duration_minutes": 30,
-                        "urgency": urgency,
-                        "specialty_match": True,
-                        "service_mode": "priority",
-                        "estimated_wait_minutes": urgency_base + priority_offset,
-                    })
-                    if len(slots) >= 3:
+                    candidate = now + timedelta(minutes=urgency_base + priority_offset)
+                    candidate = self._round_up_to_interval(candidate, 30)
+                    candidate = self._advance_into_open_hours(candidate, open_time, close_time, open_days, 30)
+                    while candidate <= hospital_cutoff and len(slots) < max_slots:
+                        est_wait = max(0, int((candidate - now).total_seconds() // 60))
+                        slots.append({
+                            "doctor_id": str(doc.id),
+                            "hospital_id": str(hosp.id),
+                            "clinic_name": hosp.name,
+                            "clinic_address": hosp.address or "Contact Hospital",
+                            "department_name": dept.name,
+                            "scheduled_at": candidate.isoformat(),
+                            "duration_minutes": 30,
+                            "urgency": urgency,
+                            "specialty_match": True,
+                            "service_mode": "priority",
+                            "estimated_wait_minutes": est_wait,
+                        })
+                        candidate = candidate + timedelta(minutes=30)
+                        candidate = self._advance_into_open_hours(candidate, open_time, close_time, open_days, 30)
+                    if len(slots) >= max_slots:
                         break
                     continue
 
                 # Default templates since Doctor table is simpler
-                start_hour: int = 9
-                end_hour: int = 17
                 duration: int = 30
-                weekdays: list[int] = [1, 2, 3, 4, 5]
+                interval_minutes: int = 30
 
                 # Fetch existing booked appointment times for this doctor
                 booked_stmt = select(Appointment.scheduled_at).where(
@@ -330,37 +579,36 @@ class BookingEngine:
                         Appointment.doctor_id == doc.id,
                         Appointment.status == "booked",
                         Appointment.scheduled_at >= now,
-                        Appointment.scheduled_at <= cutoff,
+                        Appointment.scheduled_at <= hospital_cutoff,
                     )
                 )
                 booked_result = await session.execute(booked_stmt)
-                booked_times = {row[0].replace(tzinfo=timezone.utc) for row in booked_result}
+                booked_times = {self._to_app_tz(row[0]).replace(second=0, microsecond=0) for row in booked_result}
 
-                # Iterate candidate slot times
-                cursor = now.replace(minute=0, second=0, microsecond=0)
-                while cursor <= cutoff and len(slots) < 3:
-                    if cursor.weekday() + 1 in weekdays:
-                        for hour in range(start_hour, end_hour):
-                            candidate = cursor.replace(hour=hour, minute=0)
-                            if candidate > now and candidate not in booked_times:
-                                slots.append({
-                                    "doctor_id": str(doc.id),
-                                    "hospital_id": str(hosp.id),
-                                    "clinic_name": hosp.name,
-                                    "clinic_address": hosp.address or "Contact Hospital",
-                                    "department_name": dept.name,
-                                    "scheduled_at": candidate.isoformat(),
-                                    "duration_minutes": duration,
-                                    "urgency": urgency,
-                                    "specialty_match": True,
-                                    "service_mode": "standard",
-                                    "estimated_wait_minutes": None,
-                                })
-                            if len(slots) >= 3:
-                                break
-                    cursor += timedelta(days=1)
+                # Iterate candidate slot times in 30-minute blocks inside the hospital operating window.
+                cursor = datetime.combine(now.date(), open_time, tzinfo=_APP_TZ)
+                cursor = self._round_up_to_interval(max(cursor, now), interval_minutes)
+                while cursor <= hospital_cutoff and len(slots) < max_slots:
+                    candidate = self._advance_into_open_hours(cursor, open_time, close_time, open_days, interval_minutes)
+                    if candidate > hospital_cutoff:
+                        break
+                    if candidate > now and candidate not in booked_times:
+                        slots.append({
+                            "doctor_id": str(doc.id),
+                            "hospital_id": str(hosp.id),
+                            "clinic_name": hosp.name,
+                            "clinic_address": hosp.address or "Contact Hospital",
+                            "department_name": dept.name,
+                            "scheduled_at": candidate.isoformat(),
+                            "duration_minutes": duration,
+                            "urgency": urgency,
+                            "specialty_match": True,
+                            "service_mode": "standard",
+                            "estimated_wait_minutes": None,
+                        })
+                    cursor = candidate + timedelta(minutes=interval_minutes)
 
-                if len(slots) >= 3:
+                if len(slots) >= max_slots:
                     break
 
             if not slots and (wait_minutes is not None or specialist_priorities is not None):
@@ -371,9 +619,19 @@ class BookingEngine:
                 hospitals = hosp_rows.scalars().all()
 
                 for idx, hosp in enumerate(hospitals):
+                    schedule_key = str(hosp.id)
+                    if schedule_key not in hospital_schedule_cache:
+                        hospital_schedule_cache[schedule_key] = await self._get_hospital_operating_window(session, hosp.id)
+                    open_time, close_time, open_days = hospital_schedule_cache[schedule_key]
+                    hospital_cutoff = self._hospital_cutoff(now, close_time, days_window)
+
                     if wait_minutes is not None:
-                        est = wait_minutes + idx * 5
-                        candidate = now + timedelta(minutes=est)
+                        candidate = now + timedelta(minutes=wait_minutes + idx * 30)
+                        candidate = self._round_up_to_interval(candidate, 30)
+                        candidate = self._advance_into_open_hours(candidate, open_time, close_time, open_days, 30)
+                        if candidate > hospital_cutoff:
+                            continue
+                        est = max(0, int((candidate - now).total_seconds() // 60))
                         slots.append({
                             "doctor_id": "",
                             "hospital_id": str(hosp.id),
@@ -381,7 +639,7 @@ class BookingEngine:
                             "clinic_address": hosp.address or "Contact Hospital",
                             "department_name": specialty,
                             "scheduled_at": candidate.isoformat(),
-                            "duration_minutes": 20,
+                            "duration_minutes": 30,
                             "urgency": urgency,
                             "specialty_match": True,
                             "service_mode": "wait_time",
@@ -391,8 +649,12 @@ class BookingEngine:
                     else:
                         priority = specialist_priorities[min(idx, len(specialist_priorities) - 1)]
                         priority_offset = 0 if priority == "CRITICAL" else 10 if priority == "URGENT" else 25
-                        est = urgency_base + priority_offset + idx * 5
-                        candidate = now + timedelta(minutes=est)
+                        candidate = now + timedelta(minutes=urgency_base + priority_offset + idx * 30)
+                        candidate = self._round_up_to_interval(candidate, 30)
+                        candidate = self._advance_into_open_hours(candidate, open_time, close_time, open_days, 30)
+                        if candidate > hospital_cutoff:
+                            continue
+                        est = max(0, int((candidate - now).total_seconds() // 60))
                         slots.append({
                             "doctor_id": "",
                             "hospital_id": str(hosp.id),
@@ -408,10 +670,24 @@ class BookingEngine:
                             "booking_mode": "department_queue",
                         })
 
-                    if len(slots) >= 3:
+                    if len(slots) >= max_slots:
                         break
 
-        return slots[:3]
+        def _to_datetime(iso_value: str) -> datetime:
+            value = datetime.fromisoformat(iso_value)
+            return self._to_app_tz(value)
+
+        def _in_window(slot_dt: datetime) -> bool:
+            if preferred_window == "morning":
+                return slot_dt.hour < 12
+            if preferred_window == "afternoon":
+                return slot_dt.hour >= 12
+            return True
+
+        ordered = sorted(slots, key=lambda item: _to_datetime(item["scheduled_at"]))
+        filtered = [item for item in ordered if _in_window(_to_datetime(item["scheduled_at"]))]
+
+        return filtered[:max_slots]
 
     def _build_fhir_appointment(
         self,
@@ -475,8 +751,7 @@ class BookingEngine:
         """Write appointment to DB and return the FHIR R4 resource."""
         appt_id = uuid.uuid4()
         scheduled_at = datetime.fromisoformat(scheduled_at_iso)
-        if scheduled_at.tzinfo is None:
-            scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+        scheduled_at = self._to_app_tz(scheduled_at)
 
         async with AsyncSessionLocal() as session:
             session_uuid = uuid.UUID(session_id)

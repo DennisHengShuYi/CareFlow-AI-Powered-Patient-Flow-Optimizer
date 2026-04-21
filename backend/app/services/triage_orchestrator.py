@@ -36,14 +36,14 @@ class TriageOrchestrator:
             return "NOTE: Official guidelines currently unavailable. Triage proceeding based on AI base knowledge."
 
 
-    async def run_pipeline(self, user_text: str):
+    async def run_pipeline(self, user_text: str, language_preference: str = "auto"):
         print(f"DEBUG: Starting Global-to-Local Pipeline for: {user_text[:30]}...")
         from app.utils.supabase_client import supabase_rest
         from sqlalchemy import text as sa_text
         
         # Phase 1: Extraction (Gemini Flash-Lite)
         # ----------------------------------------------------
-        extraction = await ExtractorAgent.process(user_text)
+        extraction = await ExtractorAgent.process(user_text, language_preference=language_preference)
         symptoms = extraction.get("symptoms", [])
         print(f"DEBUG: Agent 1 (Extraction) found: {symptoms}")
 
@@ -55,7 +55,7 @@ class TriageOrchestrator:
         # Phase 3: Ideal Specialty Discovery (Global List)
         # ----------------------------------------------------
         # We pass None for valid_departments to trigger the GLOBAL_DEPARTMENTS default
-        decision = await StrategistAgent.process(extraction, clinical_context)
+        decision = await StrategistAgent.process(extraction, clinical_context, language_preference=language_preference)
         ideal_specialist = decision.get("specialist")
         print(f"DEBUG: [Stage 3] Ideal Discovery -> Specialist: {ideal_specialist}")
         print(f"DEBUG: [Stage 3] Strategist Reasoning:\n{'-'*40}\n{decision.get('reasoning')}\n{'-'*40}")
@@ -88,6 +88,7 @@ class TriageOrchestrator:
                     clinical_context, 
                     valid_departments=live_depts,
                     is_fallback_mode=True
+                    ,language_preference=language_preference
                 )
                 print(f"DEBUG: [Stage 4] Live Pivot Result -> Specialist: {decision.get('specialist')}")
                 print(f"DEBUG: [Stage 4] Fallback Reasoning:\n{'-'*40}\n{decision.get('reasoning')}\n{'-'*40}")
@@ -108,7 +109,7 @@ class TriageOrchestrator:
             round_count += 1
             print(f"\n[TURN {round_count}: AUDIT] Agent: Auditor (Critic), Model: {settings.AGENT_CRITIC_MODEL}")
             
-            audit = await CriticAgent.process(symptoms, decision, clinical_context=clinical_context, language=language)
+            audit = await CriticAgent.process(symptoms, decision, clinical_context=clinical_context, language=language, language_preference=language_preference)
             final_audit = audit
             
             print(f"DEBUG: [Auditor Reasoning]\n{audit.get('critique')}")
@@ -128,7 +129,8 @@ class TriageOrchestrator:
                 clinical_context, 
                 valid_departments=live_depts, 
                 is_fallback_mode=(live_depts is not None),
-                debate_history=debate_history
+                debate_history=debate_history,
+                language_preference=language_preference
             )
             is_re_audited = True
             print(f"DEBUG: [Strategist Reasoning]\n{decision.get('reasoning')}")

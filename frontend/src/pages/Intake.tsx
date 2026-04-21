@@ -10,6 +10,7 @@ export default function Intake() {
   const { getToken } = useAuth();
   const [step, setStep] = useState<1 | 2>(1);
   const [inputMode, setInputMode] = useState<"none" | "text" | "voice">("text");
+  const [languagePreference, setLanguagePreference] = useState<'auto' | 'en' | 'ms'>('auto');
   const [textInput, setTextInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [triageData, setTriageData] = useState<any>(null);
@@ -34,6 +35,12 @@ export default function Intake() {
   const { profile } = useProfile();
   const [recommendations, setRecommendations] = useState<any[]>([]);
   const [recLoading, setRecLoading] = useState(false);
+
+  const getRecognitionLanguage = () => {
+    if (languagePreference === 'ms') return 'ms-MY';
+    if (languagePreference === 'en') return 'en-US';
+    return navigator.language || 'en-US';
+  };
 
   const fetchRecommendations = async (triage: any) => {
     setRecLoading(true);
@@ -71,6 +78,7 @@ export default function Intake() {
     setFollowUpResponse('');
     setIsFollowingUp(false);
     setInputMode('text');
+    setLanguagePreference('auto');
     setRecommendations([]);
     setAttachedDocContent(null);
     setAttachedDocName(null);
@@ -99,6 +107,7 @@ export default function Intake() {
         },
         body: JSON.stringify({ 
           text,
+          language_preference: languagePreference,
           session_id: sessionId 
         }),
         signal: controller.signal
@@ -200,7 +209,7 @@ export default function Intake() {
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
     recognition.interimResults = true;
-    recognition.lang = 'en-US';
+    recognition.lang = getRecognitionLanguage();
 
     recognition.onresult = (event: any) => {
       let interim = '';
@@ -272,9 +281,9 @@ export default function Intake() {
         {/* Language toggle */}
         <div className="lang-toggle-row">
           <div style={{ display: 'flex', background: 'var(--neutral-300)', borderRadius: '9999px', padding: '0.25rem', border: '1px solid var(--neutral-400)' }}>
-            <button style={{ padding: '0.25rem 0.75rem', borderRadius: '9999px', background: 'white', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', fontWeight: 600 }}>EN</button>
-            <button style={{ padding: '0.25rem 0.75rem', borderRadius: '9999px', color: 'var(--text-muted)' }}>BM</button>
-            <button style={{ padding: '0.25rem 0.75rem', borderRadius: '9999px', color: 'var(--text-muted)', fontSize: '0.8rem' }}>Code-switch: Auto</button>
+            <button onClick={() => setLanguagePreference('en')} style={{ padding: '0.25rem 0.75rem', borderRadius: '9999px', background: languagePreference === 'en' ? 'white' : 'transparent', boxShadow: languagePreference === 'en' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none', fontWeight: 600, color: languagePreference === 'en' ? 'var(--text-main)' : 'var(--text-muted)' }}>EN</button>
+            <button onClick={() => setLanguagePreference('ms')} style={{ padding: '0.25rem 0.75rem', borderRadius: '9999px', background: languagePreference === 'ms' ? 'white' : 'transparent', boxShadow: languagePreference === 'ms' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none', fontWeight: 600, color: languagePreference === 'ms' ? 'var(--text-main)' : 'var(--text-muted)' }}>BM</button>
+            <button onClick={() => setLanguagePreference('auto')} style={{ padding: '0.25rem 0.75rem', borderRadius: '9999px', background: languagePreference === 'auto' ? 'white' : 'transparent', boxShadow: languagePreference === 'auto' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none', color: languagePreference === 'auto' ? 'var(--text-main)' : 'var(--text-muted)', fontSize: '0.8rem', fontWeight: 600 }}>Code-switch: Auto</button>
           </div>
         </div>
 

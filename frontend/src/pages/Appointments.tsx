@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@clerk/clerk-react';
-import { Calendar, Loader2, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Calendar, Loader2, CheckCircle2, AlertTriangle, MapPin } from 'lucide-react';
 import LayoutSidebar from '../components/LayoutSidebar';
 
 type TriageContext = {
@@ -25,6 +25,19 @@ type Slot = {
   estimated_wait_minutes?: number | null;
 };
 
+type PreferredWindow = 'any' | 'morning' | 'afternoon';
+
+type NearbyFacility = {
+  id: string;
+  name: string;
+  address: string;
+  contact_number: string;
+  facility_type: string;
+  matched_departments: string[];
+  distance_note: string;
+  specialty_match: boolean;
+};
+
 type LocationState = {
   triageContext?: TriageContext;
   hospitalId?: string;
@@ -43,6 +56,7 @@ function formatSlotTime(iso: string) {
     month: 'short',
     hour: '2-digit',
     minute: '2-digit',
+    timeZone: 'Asia/Kuala_Lumpur',
   });
 }
 
@@ -61,10 +75,37 @@ export default function Appointments() {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<Slot | null>(null);
+  const [queueTooLong, setQueueTooLong] = useState(false);
+  const [queueThreshold, setQueueThreshold] = useState<number | null>(null);
+  const [nearbyFacilities, setNearbyFacilities] = useState<NearbyFacility[]>([]);
+  const [preferredWindow, setPreferredWindow] = useState<PreferredWindow>('any');
 
   const canQuery = useMemo(() => {
     return Boolean(ctx?.recommended_specialist && ctx?.urgency);
   }, [ctx]);
+
+  const groupedSlots = useMemo(() => {
+    const ordered = [...slots].sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
+    const byDate = new Map<string, Slot[]>();
+
+    ordered.forEach((slot) => {
+      const d = new Date(slot.scheduled_at);
+      const key = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+      const list = byDate.get(key) || [];
+      list.push(slot);
+      byDate.set(key, list);
+    });
+
+    return Array.from(byDate.entries()).map(([key, daySlots]) => {
+      const date = new Date(daySlots[0].scheduled_at);
+      const label = date.toLocaleDateString([], {
+        weekday: 'long',
+        day: '2-digit',
+        month: 'short',
+      });
+      return { key, label, slots: daySlots };
+    });
+  }, [slots]);
 
   useEffect(() => {
     if (ctx) return;
@@ -111,6 +152,8 @@ export default function Appointments() {
       const params = new URLSearchParams({
         specialty: ctx.recommended_specialist,
         urgency: ctx.urgency,
+        limit: '12',
+        preferred_window: preferredWindow,
       });
       if (hospitalId) {
         params.set('hospital_id', hospitalId);
@@ -135,9 +178,15 @@ export default function Appointments() {
 
       const data = await res.json();
       setSlots(data?.slots || []);
+      setQueueTooLong(Boolean(data?.queue_too_long));
+      setQueueThreshold(data?.queue_threshold_minutes ?? null);
+      setNearbyFacilities(data?.nearby_facilities || []);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unable to load slots.');
       setSlots([]);
+      setQueueTooLong(false);
+      setQueueThreshold(null);
+      setNearbyFacilities([]);
     } finally {
       setLoadingSlots(false);
     }
@@ -148,7 +197,7 @@ export default function Appointments() {
       fetchSlots();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canQuery, hospitalId]);
+  }, [canQuery, hospitalId, preferredWindow]);
 
   const bookSlot = async (slot: Slot) => {
     if (!ctx) {
@@ -209,6 +258,39 @@ export default function Appointments() {
         </div>
 
         <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          {queueTooLong && (
+            <div style={{ background: '#fff8e1', border: '1px solid #ffe082', borderRadius: '10px', padding: '0.9rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 800, color: '#8a6d00' }}>
+                  <MapPin size={18} /> Queue is long
+                </div>
+                <div style={{ fontSize: '0.85rem', color: '#8a6d00' }}>
+                  {queueThreshold ? `Waits at or above ${queueThreshold} min.` : 'Current wait times are high.'}
+                </div>
+              </div>
+              {nearbyFacilities.length > 0 ? (
+                <div style={{ display: 'grid', gap: '0.65rem' }}>
+                  {nearbyFacilities.map((facility) => (
+                    <div key={facility.id} style={{ background: 'white', border: '1px solid #ffe082', borderRadius: '10px', padding: '0.85rem', display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
+                      <div>
+                        <div style={{ fontWeight: 800 }}>{facility.name}</div>
+                        <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{facility.address}</div>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{facility.distance_note}</div>
+                      </div>
+                      <button className="btn-secondary" onClick={() => navigate('/nearby-facilities')} style={{ alignSelf: 'center' }}>
+                        View Nearby Clinics
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <button className="btn-secondary" onClick={() => navigate('/nearby-facilities')} style={{ alignSelf: 'flex-start' }}>
+                  Browse Nearby Clinics
+                </button>
+              )}
+            </div>
+          )}
+
           <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
             <div className="appt-context-card">
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Recommended Specialty</div>
@@ -267,9 +349,32 @@ export default function Appointments() {
             <div style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <Calendar size={18} color="var(--primary)" /> Available Slots
             </div>
-            <button className="btn-secondary" onClick={fetchSlots} disabled={loadingSlots || !canQuery}>
-              {loadingSlots ? 'Refreshing...' : 'Refresh Slots'}
-            </button>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <button
+                className={preferredWindow === 'any' ? 'btn-primary' : 'btn-secondary'}
+                onClick={() => setPreferredWindow('any')}
+                disabled={loadingSlots || !canQuery}
+              >
+                Anytime
+              </button>
+              <button
+                className={preferredWindow === 'morning' ? 'btn-primary' : 'btn-secondary'}
+                onClick={() => setPreferredWindow('morning')}
+                disabled={loadingSlots || !canQuery}
+              >
+                Morning
+              </button>
+              <button
+                className={preferredWindow === 'afternoon' ? 'btn-primary' : 'btn-secondary'}
+                onClick={() => setPreferredWindow('afternoon')}
+                disabled={loadingSlots || !canQuery}
+              >
+                Afternoon
+              </button>
+              <button className="btn-secondary" onClick={fetchSlots} disabled={loadingSlots || !canQuery}>
+                {loadingSlots ? 'Refreshing...' : 'Refresh Slots'}
+              </button>
+            </div>
           </div>
 
           {loadingSlots ? (
@@ -280,31 +385,36 @@ export default function Appointments() {
             <div style={{ color: 'var(--text-muted)' }}>No live slots found for the suggested department yet.</div>
           ) : (
             <div style={{ display: 'grid', gap: '0.75rem' }}>
-              {slots.map((slot) => {
-                const slotId = slot.doctor_id + slot.scheduled_at;
-                const booking = bookingSlotId === slotId;
-                return (
-                  <div key={slotId} className="appt-slot-card">
-                    <div className="appt-slot-main">
-                      <div style={{ fontWeight: 700 }}>{slot.clinic_name}</div>
-                      <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>{slot.clinic_address}</div>
-                      <div style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>Department: <strong>{slot.department_name || 'N/A'}</strong></div>
-                    </div>
-                    <div className="appt-slot-side">
-                      <div style={{ fontWeight: 700 }}>{formatSlotTime(slot.scheduled_at)}</div>
-                      <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{slot.duration_minutes} min</div>
-                      {slot.estimated_wait_minutes != null && (
-                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                          Wait: {slot.estimated_wait_minutes} min
+              {groupedSlots.map((group) => (
+                <div key={group.key} style={{ display: 'grid', gap: '0.75rem' }}>
+                  <div style={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--text-muted)' }}>{group.label}</div>
+                  {group.slots.map((slot) => {
+                    const slotId = slot.doctor_id + slot.scheduled_at;
+                    const booking = bookingSlotId === slotId;
+                    return (
+                      <div key={slotId} className="appt-slot-card">
+                        <div className="appt-slot-main">
+                          <div style={{ fontWeight: 700 }}>{slot.clinic_name}</div>
+                          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>{slot.clinic_address}</div>
+                          <div style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>Department: <strong>{slot.department_name || 'N/A'}</strong></div>
                         </div>
-                      )}
-                      <button className="btn-primary" onClick={() => bookSlot(slot)} disabled={booking || !ctx}>
-                        {booking ? 'Booking...' : 'Book This Slot'}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+                        <div className="appt-slot-side">
+                          <div style={{ fontWeight: 700 }}>{formatSlotTime(slot.scheduled_at)}</div>
+                          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{slot.duration_minutes} min</div>
+                          {slot.estimated_wait_minutes != null && (
+                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                              Wait: {slot.estimated_wait_minutes} min
+                            </div>
+                          )}
+                          <button className="btn-primary" onClick={() => bookSlot(slot)} disabled={booking || !ctx}>
+                            {booking ? 'Booking...' : 'Book This Slot'}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
             </div>
           )}
         </div>

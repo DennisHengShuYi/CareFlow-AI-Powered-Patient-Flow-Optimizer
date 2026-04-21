@@ -33,6 +33,7 @@ from app.utils.supabase_client import supabase_rest
 router = APIRouter()
 
 MAX_FOLLOW_UP_TURNS = 3
+QUEUE_DIVERSION_THRESHOLD_MINUTES = 45
 
 # ---------------------------------------------------------------------------
 # Audit helper
@@ -173,6 +174,107 @@ class AssignRoomBody(BaseModel):
     doctor_id: str | None = None
 
 
+def _calculate_haversine(lat1, lon1, lat2, lon2):
+    R = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (math.sin(dlat / 2) ** 2 +
+         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2)
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
+
+async def _build_nearby_facilities_for_user(
+    clerk_user_id: str,
+    specialist: str = "",
+    location: str = "",
+    latitude: float | None = None,
+    longitude: float | None = None,
+    limit: int = 12,
+) -> list[dict]:
+    hospitals = await supabase_rest.query_table("hospitals", {
+        "select": "*,departments(id,name,specialty_code)",
+        "is_active": "eq.true"
+    })
+    if not hospitals:
+        return []
+
+    profile = await supabase_rest.get_profile(clerk_user_id)
+    user_lat = latitude if latitude is not None else (profile.get("latitude") if profile else None)
+    user_lng = longitude if longitude is not None else (profile.get("longitude") if profile else None)
+
+    if (user_lat is None or user_lng is None):
+        user_loc = (profile.get("location") if profile else None) or location
+        if user_loc:
+            loc_map = {
+                "miri": (4.3995, 113.9914),
+                "kl": (3.1390, 101.6869),
+                "kuala lumpur": (3.1390, 101.6869),
+                "pj": (3.1073, 101.6067),
+                "petaling jaya": (3.1073, 101.6067),
+                "cyberjaya": (2.9213, 101.6511),
+            }
+            loc_lower = user_loc.lower()
+            for city, coords in loc_map.items():
+                if city in loc_lower:
+                    user_lat, user_lng = coords
+                    break
+
+    specialist_lower = specialist.lower().strip()
+
+    facilities: list[dict] = []
+    for hospital in hospitals:
+        departments = hospital.get("departments", []) or []
+        matched_depts: list[str] = []
+
+        for dept in departments:
+            dept_name = dept.get("name", "")
+            dept_lower = dept_name.lower()
+            code = (dept.get("specialty_code") or "").lower()
+
+            if specialist_lower:
+                if specialist_lower in dept_lower or dept_lower in specialist_lower or (code and specialist_lower in code):
+                    matched_depts.append(dept_name)
+            else:
+                matched_depts.append(dept_name)
+
+        if specialist_lower and not matched_depts:
+            continue
+
+        h_lat = hospital.get("latitude")
+        h_lng = hospital.get("longitude")
+        dist_km = None
+        if user_lat is not None and user_lng is not None and h_lat is not None and h_lng is not None:
+            dist_km = _calculate_haversine(user_lat, user_lng, h_lat, h_lng)
+
+        name = hospital.get("name", "Unknown")
+        lower_name = name.lower()
+        if "clinic" in lower_name:
+            facility_type = "clinic"
+        elif "hospital" in lower_name:
+            facility_type = "hospital"
+        else:
+            facility_type = "healthcare"
+
+        facilities.append({
+            "id": str(hospital["id"]),
+            "name": name,
+            "address": hospital.get("address") or "Address not available",
+            "contact_number": hospital.get("contact_number") or "",
+            "latitude": h_lat,
+            "longitude": h_lng,
+            "facility_type": facility_type,
+            "specialty_match": bool(matched_depts),
+            "matched_departments": matched_depts,
+            "all_departments": [d.get("name", "") for d in departments],
+            "distance_km": dist_km,
+            "distance_note": f"{round(dist_km, 1)} km away" if dist_km is not None else "Distance unknown",
+        })
+
+    facilities.sort(key=lambda item: (item["distance_km"] if item["distance_km"] is not None else 999999))
+    return facilities[: max(1, min(limit, 20))]
+
+
 # ---------------------------------------------------------------------------
 # POST /intake/text
 # ---------------------------------------------------------------------------
@@ -186,6 +288,7 @@ async def intake_text(
     t0 = time.time()
     
     text = body.get("text")
+    language_preference = body.get("language_preference", "auto")
     session_id = body.get("session_id") or str(uuid.uuid4())
     
     if not text:
@@ -224,7 +327,7 @@ async def intake_text(
         print("DEBUG: [Stage 3] Calling Global Multi-Agent Triage...")
         
         # We now use the Global-to-Local pipeline (decisions are hospital-agnostic initially)
-        pipeline_output = await triage_orchestrator.run_pipeline(raw)
+        pipeline_output = await triage_orchestrator.run_pipeline(raw, language_preference=language_preference)
 
         # Map pipeline output to the frontend expected format
         decision = pipeline_output.get("decision", {})
@@ -425,10 +528,58 @@ async def appointment_slots(
     specialty: str,
     urgency: str,
     hospital_id: str | None = None,
-    _user: dict = Depends(verify_clerk_token),
+    limit: int = 12,
+    preferred_window: str = "any",
+    auto_expand: bool = True,
+    user: dict = Depends(verify_clerk_token),
 ):
-    slots = await booking_engine.get_available_slots(specialty, urgency, hospital_id)
-    return {"slots": slots}
+    slot_limit = max(3, min(limit, 24))
+    normalized_window = preferred_window.strip().lower()
+    if normalized_window not in {"any", "morning", "afternoon"}:
+        normalized_window = "any"
+
+    slots = await booking_engine.get_available_slots(
+        specialty,
+        urgency,
+        hospital_id,
+        limit=slot_limit,
+        preferred_window=normalized_window,
+    )
+
+    expanded_from_hospital_filter = False
+    if hospital_id and auto_expand and len(slots) < slot_limit:
+        extra_slots = await booking_engine.get_available_slots(
+            specialty,
+            urgency,
+            None,
+            limit=slot_limit * 2,
+            preferred_window=normalized_window,
+        )
+        seen = {(s.get("doctor_id"), s.get("scheduled_at")) for s in slots}
+        for slot in extra_slots:
+            key = (slot.get("doctor_id"), slot.get("scheduled_at"))
+            if key in seen:
+                continue
+            slots.append(slot)
+            seen.add(key)
+            if len(slots) >= slot_limit:
+                break
+        expanded_from_hospital_filter = len(slots) > 0
+    wait_values = [slot.get("estimated_wait_minutes") for slot in slots if slot.get("estimated_wait_minutes") is not None]
+    queue_too_long = not slots or (bool(wait_values) and min(wait_values) >= QUEUE_DIVERSION_THRESHOLD_MINUTES)
+
+    nearby_facilities: list[dict] = []
+    if queue_too_long:
+        uid = user.get("sub") if isinstance(user, dict) else str(user)
+        nearby_facilities = await _build_nearby_facilities_for_user(uid, specialist=specialty, limit=3)
+
+    return {
+        "slots": slots,
+        "queue_too_long": queue_too_long,
+        "queue_threshold_minutes": QUEUE_DIVERSION_THRESHOLD_MINUTES,
+        "nearby_facilities": nearby_facilities,
+        "expanded_from_hospital_filter": expanded_from_hospital_filter,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -701,98 +852,16 @@ async def nearby_facilities(
     user_id: str = Depends(verify_clerk_token)
 ):
     """Return nearby healthcare facilities for the patient map and booking flow."""
-    hospitals = await supabase_rest.query_table("hospitals", {
-        "select": "*,departments(id,name,specialty_code)",
-        "is_active": "eq.true"
-    })
-    if not hospitals:
-        return {"facilities": []}
-
     uid = user_id.get("sub") if isinstance(user_id, dict) else user_id
-    profile = await supabase_rest.get_profile(uid)
-
-    user_lat = body.latitude or (profile.get("latitude") if profile else None)
-    user_lng = body.longitude or (profile.get("longitude") if profile else None)
-
-    if (not user_lat or not user_lng):
-        user_loc = (profile.get("location") if profile else None) or body.location
-        if user_loc:
-            loc_map = {
-                "miri": (4.3995, 113.9914),
-                "kl": (3.1390, 101.6869),
-                "kuala lumpur": (3.1390, 101.6869),
-                "pj": (3.1073, 101.6067),
-                "petaling jaya": (3.1073, 101.6067),
-                "cyberjaya": (2.9213, 101.6511),
-            }
-            loc_lower = user_loc.lower()
-            for city, coords in loc_map.items():
-                if city in loc_lower:
-                    user_lat, user_lng = coords
-                    break
-
-    specialist_lower = body.specialist.lower().strip()
-
-    def _calculate_haversine(lat1, lon1, lat2, lon2):
-        R = 6371.0
-        dlat = math.radians(lat2 - lat1)
-        dlon = math.radians(lon2 - lon1)
-        a = (math.sin(dlat / 2) ** 2 +
-             math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2)
-        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-        return R * c
-
-    def _facility_type(name: str) -> str:
-        lower = name.lower()
-        if "clinic" in lower:
-            return "clinic"
-        if "hospital" in lower:
-            return "hospital"
-        return "healthcare"
-
-    facilities: list[dict] = []
-    for hospital in hospitals:
-        departments = hospital.get("departments", []) or []
-        matched_depts: list[str] = []
-
-        for dept in departments:
-            dept_name = dept.get("name", "")
-            dept_lower = dept_name.lower()
-            code = (dept.get("specialty_code") or "").lower()
-
-            if specialist_lower:
-                if specialist_lower in dept_lower or dept_lower in specialist_lower or (code and specialist_lower in code):
-                    matched_depts.append(dept_name)
-            else:
-                matched_depts.append(dept_name)
-
-        if specialist_lower and not matched_depts:
-            continue
-
-        h_lat = hospital.get("latitude")
-        h_lng = hospital.get("longitude")
-        dist_km = None
-        if user_lat is not None and user_lng is not None and h_lat is not None and h_lng is not None:
-            dist_km = _calculate_haversine(user_lat, user_lng, h_lat, h_lng)
-
-        name = hospital.get("name", "Unknown")
-        facilities.append({
-            "id": str(hospital["id"]),
-            "name": name,
-            "address": hospital.get("address") or "Address not available",
-            "contact_number": hospital.get("contact_number") or "",
-            "latitude": h_lat,
-            "longitude": h_lng,
-            "facility_type": _facility_type(name),
-            "specialty_match": bool(matched_depts),
-            "matched_departments": matched_depts,
-            "all_departments": [d.get("name", "") for d in departments],
-            "distance_km": dist_km,
-            "distance_note": f"{round(dist_km, 1)} km away" if dist_km is not None else "Distance unknown",
-        })
-
-    facilities.sort(key=lambda item: (item["distance_km"] if item["distance_km"] is not None else 999999))
-    return {"facilities": facilities[: max(1, min(body.limit, 20))]}
+    facilities = await _build_nearby_facilities_for_user(
+        uid,
+        specialist=body.specialist,
+        location=body.location,
+        latitude=body.latitude,
+        longitude=body.longitude,
+        limit=body.limit,
+    )
+    return {"facilities": facilities}
 
 
 async def _get_hospital_id(user_id: str):

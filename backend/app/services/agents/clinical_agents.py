@@ -36,8 +36,13 @@ class ExtractorAgent:
 
     
     @classmethod
-    async def process(cls, user_text: str):
-        prompt = f"Extract clinical facts from: {user_text}"
+    async def process(cls, user_text: str, language_preference: str = "auto"):
+        prompt = f"""
+        LANGUAGE PREFERENCE: {language_preference}
+        Extract clinical facts from: {user_text}
+        If LANGUAGE PREFERENCE is ms, prefer Bahasa Malaysia in structured fields where possible.
+        If LANGUAGE PREFERENCE is auto, preserve the user's language and code-switch style.
+        """
         try:
             res = await llm.generate(prompt, cls.SYSTEM_PROMPT, response_format="json", model=cls.MODEL)
             return json.loads(res)
@@ -99,7 +104,7 @@ class StrategistAgent:
 
     
     @classmethod
-    async def process(cls, extraction_data: dict, clinical_context: str, valid_departments: list = None, debate_history: str = None, is_fallback_mode: bool = False):
+    async def process(cls, extraction_data: dict, clinical_context: str, valid_departments: list = None, debate_history: str = None, is_fallback_mode: bool = False, language_preference: str = "auto"):
         language = extraction_data.get("language", "en")
         first_imp = extraction_data.get("first_impression", {})
         depts_to_use = valid_departments if valid_departments else cls.GLOBAL_DEPARTMENTS
@@ -111,6 +116,10 @@ class StrategistAgent:
         prompt = f"""
         {mode_instruction}
         TARGET LANGUAGE: {language}
+        USER LANGUAGE PREFERENCE: {language_preference}
+        - If preference is ms, respond in Bahasa Malaysia unless the user clearly uses English.
+        - If preference is en, respond in English.
+        - If preference is auto, mirror the patient's language and code-switch naturally.
         
         VALID DEPARTMENTS: {depts_str}
 
@@ -176,9 +185,10 @@ class CriticAgent:
     
     @classmethod
 
-    async def process(cls, symptoms: list, decision: dict, clinical_context: str = "", language: str = "en"):
+    async def process(cls, symptoms: list, decision: dict, clinical_context: str = "", language: str = "en", language_preference: str = "auto"):
         prompt = f"""
         TARGET LANGUAGE: {language}
+        USER LANGUAGE PREFERENCE: {language_preference}
         
         SYMPTOMS: {symptoms}
         PROPOSED DECISION: {decision}
