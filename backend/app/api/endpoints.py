@@ -114,6 +114,7 @@ class BookRequest(BaseModel):
     session_id: str
     patient_id: str | None = None
     provider_id: str | None = None
+    hospital_id: str | None = None
     scheduled_at: str       # ISO 8601
     urgency: str
     complaint: str
@@ -555,9 +556,9 @@ async def appointment_slots(
             limit=slot_limit * 2,
             preferred_window=normalized_window,
         )
-        seen = {(s.get("doctor_id"), s.get("scheduled_at")) for s in slots}
+        seen = {(s.get("doctor_id"), s.get("hospital_id"), s.get("scheduled_at")) for s in slots}
         for slot in extra_slots:
-            key = (slot.get("doctor_id"), slot.get("scheduled_at"))
+            key = (slot.get("doctor_id"), slot.get("hospital_id"), slot.get("scheduled_at"))
             if key in seen:
                 continue
             slots.append(slot)
@@ -596,6 +597,7 @@ async def book_appointment(
             session_id=body.session_id,
             patient_id=body.patient_id,
             provider_id=body.provider_id,
+            hospital_id=body.hospital_id,
             scheduled_at_iso=body.scheduled_at,
             urgency=body.urgency,
             complaint=body.complaint,
