@@ -346,10 +346,8 @@ async def get_session(
         return {
             "id": str(sess.id),
             "urgency_level": sess.urgency_level,
-            "confidence_score": sess.confidence_score,
             "status": sess.status,
             "triage_result": sess.triage_result,
-            "language_detected": sess.language_detected,
         }
 
 

@@ -18,8 +18,9 @@ class Base(DeclarativeBase):
 # ---------------------------------------------------------------------------
 # Engine and Session
 # ---------------------------------------------------------------------------
-# Note: Force the direct DB URL to bypass any stale os.environ variables trapped in uvicorn
-_DB_URL = "postgresql+asyncpg://postgres:1tzM0ZzSOS3oicsB@db.guiimyubbbrnzmzncetx.supabase.co:5432/postgres"
+_DB_URL = settings.DATABASE_URL or settings.DATABASE_URL_DIRECT
+if not _DB_URL:
+    raise RuntimeError("DATABASE_URL (or DATABASE_URL_DIRECT) is missing in .env")
 
 engine = create_async_engine(
     _DB_URL,
@@ -61,11 +62,7 @@ class Session(Base):
     conversation_history: Mapped[list] = mapped_column(JSONB, default=list)
     triage_result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     urgency_level: Mapped[str | None] = mapped_column(String(10), nullable=True)   # P1-P4
-    confidence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    follow_up_count: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(50), default="active")
-    intake_channel: Mapped[str] = mapped_column(String(50), default="text")
-    language_detected: Mapped[str | None] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
