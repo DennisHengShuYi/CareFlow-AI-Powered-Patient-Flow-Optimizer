@@ -210,15 +210,15 @@ export default function Appointments() {
 
         <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-            <div style={{ flex: 1, minWidth: '240px', background: 'var(--neutral-200)', borderRadius: '10px', padding: '0.85rem 1rem' }}>
+            <div className="appt-context-card">
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Recommended Specialty</div>
               <div style={{ fontWeight: 700 }}>{ctx?.recommended_specialist || 'Not available'}</div>
             </div>
-            <div style={{ flex: 1, minWidth: '160px', background: 'var(--neutral-200)', borderRadius: '10px', padding: '0.85rem 1rem' }}>
+            <div className="appt-context-card">
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Urgency</div>
               <div style={{ fontWeight: 700 }}>{ctx?.urgency || 'Not available'}</div>
             </div>
-            <div style={{ flex: 2, minWidth: '260px', background: 'var(--neutral-200)', borderRadius: '10px', padding: '0.85rem 1rem' }}>
+            <div className="appt-context-card" style={{ flex: 2 }}>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Chief Complaint</div>
               <div style={{ fontWeight: 600 }}>{ctx?.chief_complaint || 'Not available'}</div>
             </div>
@@ -284,13 +284,13 @@ export default function Appointments() {
                 const slotId = slot.doctor_id + slot.scheduled_at;
                 const booking = bookingSlotId === slotId;
                 return (
-                  <div key={slotId} style={{ border: '1px solid var(--neutral-400)', borderRadius: '12px', padding: '1rem', display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-                    <div style={{ minWidth: '240px', flex: 1 }}>
+                  <div key={slotId} className="appt-slot-card">
+                    <div className="appt-slot-main">
                       <div style={{ fontWeight: 700 }}>{slot.clinic_name}</div>
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>{slot.clinic_address}</div>
                       <div style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>Department: <strong>{slot.department_name || 'N/A'}</strong></div>
                     </div>
-                    <div style={{ minWidth: '220px', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.55rem' }}>
+                    <div className="appt-slot-side">
                       <div style={{ fontWeight: 700 }}>{formatSlotTime(slot.scheduled_at)}</div>
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{slot.duration_minutes} min</div>
                       {slot.estimated_wait_minutes != null && (

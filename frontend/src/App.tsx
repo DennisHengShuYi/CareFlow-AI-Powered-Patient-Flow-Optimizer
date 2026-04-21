@@ -18,7 +18,7 @@ function HomeDispatcher() {
   
   if (loading) {
     return (
-      <div style={{ height: '100vh', width: '100vw', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-gradient)' }}>
+      <div style={{ height: '100vh', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-gradient)' }}>
         <Loader2 size={40} className="animate-spin text-primary" />
       </div>
     );
@@ -39,7 +39,7 @@ function ProtectedRoute({ children, allowedRoles }: { children: React.ReactNode,
   // If still loading Clerk or Supabase profile
   if (!isLoaded || (isSignedIn && profileLoading)) {
     return (
-      <div style={{ height: '100vh', width: '100vw', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-gradient)' }}>
+      <div style={{ height: '100vh', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-gradient)' }}>
         <Loader2 size={40} className="animate-spin text-primary" />
       </div>
     );
@@ -78,7 +78,7 @@ function App() {
         <Route 
           path="/sign-in/*" 
           element={
-            <div style={{ display: 'flex', width: '100vw', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-gradient)' }}>
+            <div style={{ display: 'flex', width: '100%', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-gradient)' }}>
               <SignIn 
                 routing="path" 
                 path="/sign-in" 
@@ -111,7 +111,7 @@ function App() {
         <Route 
           path="/sign-up/*" 
           element={
-            <div style={{ display: 'flex', width: '100vw', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-gradient)' }}>
+            <div style={{ display: 'flex', width: '100%', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-gradient)' }}>
               <SignUp 
                 routing="path" 
                 path="/sign-up" 

@@ -259,7 +259,7 @@ export default function NearbyFacilities() {
             </div>
           </div>
 
-          <div style={{ height: '520px', borderRadius: '16px', overflow: 'hidden', border: '1px solid var(--neutral-400)' }}>
+          <div className="facility-map">
             <MapContainer
               center={mapCenter}
               zoom={13}
@@ -343,7 +343,7 @@ export default function NearbyFacilities() {
                       }}
                     >
                       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-                        <div style={{ display: 'grid', gap: '0.35rem', minWidth: '260px', flex: 1 }}>
+                        <div className="facility-row-main">
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                             <div style={{ fontWeight: 800, fontSize: '1rem' }}>{facility.name}</div>
                             <span style={{ fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '0.2rem 0.45rem', borderRadius: '999px', background: 'var(--neutral-200)', color: 'var(--text-muted)' }}>
@@ -361,7 +361,7 @@ export default function NearbyFacilities() {
                             )}
                           </div>
                         </div>
-                        <div style={{ minWidth: '180px', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.55rem' }}>
+                        <div className="facility-row-side">
                           <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                             {facility.specialty_match ? 'Matches booking filter' : 'Available for general browsing'}
                           </div>

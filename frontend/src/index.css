@@ -30,6 +30,10 @@
   --font-h1: 2.5rem;
   --font-h2: 1.5rem;
   --font-p: 1.125rem;
+  --sidebar-block-padding: 2rem;
+  --sidebar-inline-padding: 2rem;
+  --sidebar-brand-gap: 3rem;
+  --sidebar-nav-padding: 1rem 2rem;
 }
 
 @media (max-width: 1200px) {
@@ -45,6 +49,9 @@
     --page-padding: 2rem;
     --font-h1: 2rem;
     --font-h2: 1.25rem;
+    --sidebar-inline-padding: 1.1rem;
+    --sidebar-brand-gap: 1.75rem;
+    --sidebar-nav-padding: 0.9rem 1.1rem;
   }
 }
 
@@ -56,6 +63,10 @@
     --font-h1: 1.75rem;
     --font-h2: 1.125rem;
     --font-p: 1rem;
+    --sidebar-block-padding: 1.25rem;
+    --sidebar-inline-padding: 0.75rem;
+    --sidebar-brand-gap: 1.25rem;
+    --sidebar-nav-padding: 0.75rem 0.8rem;
   }
 }
 
@@ -78,6 +89,7 @@ body {
   background-color: var(--neutral-300);
   margin: 0;
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
 }
 
 h1, h2, h3, h4, h5, h6 {
@@ -306,6 +318,277 @@ a {
   padding: var(--page-padding) !important;
 }
 
+.topnav-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1rem 3rem;
+  border-bottom: 1px solid var(--neutral-400);
+  background-color: var(--neutral-100);
+}
+
+.topnav-links {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+}
+
+.topnav-links ul {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  gap: 2rem;
+}
+
+.topnav-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+@media (max-width: 1024px) {
+  .topnav-header {
+    padding: 0.9rem 1.2rem;
+    flex-wrap: wrap;
+  }
+
+  .topnav-links {
+    order: 3;
+    width: 100%;
+    justify-content: flex-start;
+    overflow-x: auto;
+  }
+
+  .topnav-links ul {
+    gap: 1rem;
+    padding-bottom: 0.2rem;
+    white-space: nowrap;
+  }
+
+  .topnav-actions {
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+}
+
+.sidebar-brand {
+  padding: 0 var(--sidebar-inline-padding);
+  margin-bottom: var(--sidebar-brand-gap);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  overflow: hidden;
+}
+
+.sidebar-cta-wrap {
+  padding: 0 calc(var(--sidebar-inline-padding) - 0.5rem);
+  margin-bottom: 2rem;
+  overflow: hidden;
+}
+
+.sidebar-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: var(--sidebar-nav-padding);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.sidebar-footer {
+  padding: 2rem calc(var(--sidebar-inline-padding) - 0.5rem) 0;
+  border-top: 1px solid var(--neutral-400);
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  overflow: hidden;
+}
+
+.appt-context-card {
+  flex: 1;
+  min-width: 220px;
+  background: var(--neutral-200);
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+}
+
+.appt-slot-card {
+  border: 1px solid var(--neutral-400);
+  border-radius: 12px;
+  padding: 1rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.appt-slot-main {
+  min-width: 240px;
+  flex: 1;
+}
+
+.appt-slot-side {
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.55rem;
+}
+
+.facility-row-main {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 260px;
+  flex: 1;
+}
+
+.facility-row-side {
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.55rem;
+}
+
+.facility-map {
+  height: 520px;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid var(--neutral-400);
+}
+
+/* LiveTriage + Departments responsive helpers */
+@media (max-width: 1024px) {
+  .triage-queue-table-header {
+    display: none !important;
+  }
+
+  .triage-queue-row {
+    grid-template-columns: 1fr !important;
+    gap: 0.75rem !important;
+    align-items: flex-start !important;
+  }
+
+  .triage-search-box {
+    max-width: 100% !important;
+    width: 100% !important;
+  }
+
+  .triage-top-actions > .card,
+  .triage-top-actions > button {
+    flex: 1 1 220px;
+  }
+
+  .triage-vitals-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .departments-manage-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .departments-inline-form {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 768px) {
+  .triage-action-row {
+    flex-direction: column;
+  }
+
+  .triage-override-grid {
+    flex-direction: column;
+  }
+
+  .triage-vitals-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .departments-tab-toggle {
+    display: flex !important;
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .departments-tab-toggle > button {
+    flex: 1 1 180px;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .live-triage-page h1,
+  .departments-page h1 {
+    font-size: 1.75rem !important;
+  }
+
+  .triage-top-actions {
+    width: 100%;
+    gap: 0.75rem !important;
+  }
+
+  .triage-top-actions > .card,
+  .triage-top-actions > button {
+    width: 100%;
+  }
+
+  .triage-queue-controls {
+    width: 100%;
+    align-items: stretch !important;
+  }
+
+  .triage-queue-controls > * {
+    width: 100%;
+  }
+
+  .triage-queue-row {
+    padding: 0.85rem !important;
+  }
+
+  .triage-action-row button,
+  .triage-override-grid > div,
+  .departments-inline-form > * {
+    width: 100%;
+  }
+
+  .departments-tab-toggle > button {
+    flex: 1 1 100%;
+  }
+
+  .departments-manage-grid section {
+    padding: 1rem !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .appt-context-card,
+  .appt-slot-main,
+  .appt-slot-side,
+  .facility-row-main,
+  .facility-row-side {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .appt-slot-side,
+  .facility-row-side {
+    align-items: flex-start;
+  }
+
+  .facility-map {
+    height: 360px;
+  }
+}
+
+@media (max-width: 480px) {
+  .facility-map {
+    height: 300px;
+  }
+}
+
 /* Page-level wrapper for Intake / Patient pages */
 .intake-page-wrapper {
   padding: 2rem;
@@ -384,6 +667,12 @@ a {
     cursor: pointer;
     transform: none !important;
     min-width: 0;
+  }
+  .mobile-bottom-nav > * span {
+    width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
   .mobile-bottom-nav > a.active {
     color: var(--primary);

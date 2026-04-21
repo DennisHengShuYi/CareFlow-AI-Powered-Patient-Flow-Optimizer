@@ -196,6 +196,39 @@ class BookingEngine:
         )
         return new_id
 
+    async def _ensure_session_exists(
+        self,
+        session,
+        session_id: uuid.UUID,
+        patient_id: uuid.UUID,
+        urgency: str,
+    ) -> None:
+        """Create a minimal sessions row when the given session_id is missing."""
+        existing = await session.execute(
+            text("SELECT id FROM sessions WHERE id = :sid LIMIT 1"),
+            {"sid": session_id},
+        )
+        if existing.first():
+            return
+
+        await session.execute(
+            text(
+                """
+                INSERT INTO sessions (id, patient_id, urgency_level, status, intake_channel, follow_up_count, conversation_history)
+                VALUES (:id, :patient_id, :urgency_level, :status, :intake_channel, :follow_up_count, :conversation_history::jsonb)
+                """
+            ),
+            {
+                "id": session_id,
+                "patient_id": patient_id,
+                "urgency_level": urgency,
+                "status": "active",
+                "intake_channel": "text",
+                "follow_up_count": 0,
+                "conversation_history": "[]",
+            },
+        )
+
     async def get_available_slots(
         self,
         specialty: str,
@@ -446,7 +479,9 @@ class BookingEngine:
             scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
 
         async with AsyncSessionLocal() as session:
+            session_uuid = uuid.UUID(session_id)
             patient_uuid = await self._resolve_patient_id(session, patient_id, patient_profile_id)
+            await self._ensure_session_exists(session, session_uuid, patient_uuid, urgency)
 
             provider_clean = (provider_id or "").strip()
             doctor_uuid: uuid.UUID | None = None
@@ -481,7 +516,7 @@ class BookingEngine:
 
             appt = Appointment(
                 id=appt_id,
-                session_id=uuid.UUID(session_id),
+                session_id=session_uuid,
                 patient_id=patient_uuid,
                 doctor_id=doctor_uuid,
                 scheduled_at=scheduled_at,
