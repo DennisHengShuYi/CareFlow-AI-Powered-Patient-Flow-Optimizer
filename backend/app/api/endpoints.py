@@ -611,9 +611,75 @@ async def book_appointment(
             patient_profile_id=user.get("sub"),
             duration_minutes=body.duration_minutes,
         )
+
+        # ── Room assignment ──────────────────────────────────────────────────
+        # Convert scheduled_at to MYT (UTC+8) and check working hours 08:00-17:00
+        room_label: str | None = None
+        try:
+            from datetime import timedelta
+            MYT_OFFSET = timedelta(hours=8)
+            scheduled_utc = datetime.fromisoformat(body.scheduled_at.replace("Z", "+00:00"))
+            if scheduled_utc.tzinfo is None:
+                scheduled_utc = scheduled_utc.replace(tzinfo=timezone.utc)
+            scheduled_myt = scheduled_utc.astimezone(timezone(MYT_OFFSET))
+            hour_myt = scheduled_myt.hour
+            is_working_hours = 8 <= hour_myt < 17
+
+            if is_working_hours and body.provider_id:
+                async with AsyncSessionLocal() as db:
+                    # Look up the doctor's department
+                    doctor_res = await db.execute(
+                        select(Doctor).where(Doctor.id == uuid.UUID(body.provider_id))
+                    )
+                    doctor = doctor_res.scalar_one_or_none()
+
+                    if doctor and doctor.department_id:
+                        # Find appointment id just created (latest for this patient/session)
+                        appt_res = await db.execute(
+                            text(
+                                "SELECT id FROM appointments "
+                                "WHERE session_id = :sid "
+                                "ORDER BY created_at DESC LIMIT 1"
+                            ),
+                            {"sid": body.session_id},
+                        )
+                        appt_row = appt_res.first()
+
+                        # Get room with lowest usage in the department
+                        room_res = await db.execute(
+                            select(Room)
+                            .where(Room.department_id == doctor.department_id)
+                            .order_by(Room.usage_minutes.asc())
+                            .limit(1)
+                        )
+                        room = room_res.scalar_one_or_none()
+
+                        if room and appt_row:
+                            appt_id = appt_row[0]
+                            # Assign room and increment usage
+                            await db.execute(
+                                text(
+                                    "UPDATE appointments SET room_id = :rid WHERE id = :aid"
+                                ),
+                                {"rid": str(room.id), "aid": str(appt_id)},
+                            )
+                            new_usage = (room.usage_minutes or 0) + (body.duration_minutes or 30)
+                            await db.execute(
+                                text(
+                                    "UPDATE rooms SET usage_minutes = :um WHERE id = :rid"
+                                ),
+                                {"um": new_usage, "rid": str(room.id)},
+                            )
+                            await db.commit()
+                            room_label = room.label
+                            print(f"DEBUG: Assigned room '{room_label}' to appointment {appt_id}")
+        except Exception as room_err:
+            print(f"DEBUG: Room assignment failed (non-fatal): {room_err}")
+        # ────────────────────────────────────────────────────────────────────
+
         latency = int((time.time() - t0) * 1000)
         await _audit(body.session_id, "/appointments/book", body.complaint, latency, 200)
-        return {"status": "confirmed", "fhir_resource": fhir}
+        return {"status": "confirmed", "fhir_resource": fhir, "room_label": room_label}
     except ValueError as exc:
         latency = int((time.time() - t0) * 1000)
         await _audit(body.session_id, "/appointments/book", body.complaint, latency, 409, str(exc))
@@ -624,11 +690,12 @@ async def book_appointment(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+
 @router.get("/appointments/my")
 async def my_appointments(user: dict = Depends(verify_clerk_token)):
     """Return current/upcoming/history appointments for the signed-in patient."""
     clerk_id = user.get("sub") if isinstance(user, dict) else str(user)
-    now = datetime.utcnow().replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
 
     async with AsyncSessionLocal() as db:
         patient_res = await db.execute(
@@ -641,13 +708,14 @@ async def my_appointments(user: dict = Depends(verify_clerk_token)):
         patient_id = patient_row[0]
 
         appt_res = await db.execute(
-            select(Appointment)
+            select(Appointment, Hospital.name)
+            .join(Hospital, Appointment.hospital_id == Hospital.id)
             .where(Appointment.patient_id == patient_id)
             .order_by(Appointment.scheduled_at.desc())
         )
-        appointments = appt_res.scalars().all()
+        appointment_rows = appt_res.all()
 
-        async def enrich(appt: Appointment):
+        async def enrich(appt: Appointment, hosp_name: str):
             people_before = 0
             if appt.doctor_id:
                 queue_res = await db.execute(
@@ -672,8 +740,22 @@ async def my_appointments(user: dict = Depends(verify_clerk_token)):
                 )
                 people_before = int(queue_res.scalar() or 0)
 
-            wait_from_time = max(0, int((appt.scheduled_at - now).total_seconds() // 60))
+            appt_at = appt.scheduled_at
+            if appt_at.tzinfo is None:
+                appt_at = appt_at.replace(tzinfo=timezone.utc)
+
+            wait_from_time = max(0, int((appt_at - now).total_seconds() // 60))
             live_wait_minutes = wait_from_time + (people_before * int(appt.duration_minutes or 30))
+
+            # Fetch room label if assigned
+            room_label: str | None = None
+            if appt.room_id:
+                room_res = await db.execute(
+                    select(Room).where(Room.id == appt.room_id)
+                )
+                room = room_res.scalar_one_or_none()
+                if room:
+                    room_label = room.label
 
             return {
                 "id": str(appt.id),
@@ -684,20 +766,22 @@ async def my_appointments(user: dict = Depends(verify_clerk_token)):
                 "status": appt.status,
                 "chief_complaint": appt.chief_complaint,
                 "doctor_id": str(appt.doctor_id) if appt.doctor_id else None,
+                "room_label": room_label,
                 "people_before": people_before,
                 "live_wait_minutes": live_wait_minutes,
+                "hospital_name": hosp_name,
             }
 
-        upcoming_raw = [a for a in appointments if a.scheduled_at >= now and a.status == APPOINTMENT_STATUS_SCHEDULED]
-        history_raw = [a for a in appointments if a.scheduled_at < now or a.status != APPOINTMENT_STATUS_SCHEDULED]
+        upcoming_raw = [r for r in appointment_rows if r[0].scheduled_at.replace(tzinfo=timezone.utc if r[0].scheduled_at.tzinfo is None else r[0].scheduled_at.tzinfo) >= now and r[0].status == APPOINTMENT_STATUS_SCHEDULED]
+        history_raw = [r for r in appointment_rows if r[0].scheduled_at.replace(tzinfo=timezone.utc if r[0].scheduled_at.tzinfo is None else r[0].scheduled_at.tzinfo) < now or r[0].status != APPOINTMENT_STATUS_SCHEDULED]
 
         current = None
         if upcoming_raw:
-            nearest = sorted(upcoming_raw, key=lambda a: a.scheduled_at)[0]
-            current = await enrich(nearest)
+            nearest = sorted(upcoming_raw, key=lambda r: r[0].scheduled_at)[0]
+            current = await enrich(nearest[0], nearest[1])
 
-        upcoming = [await enrich(a) for a in sorted(upcoming_raw, key=lambda x: x.scheduled_at)]
-        history = [await enrich(a) for a in history_raw]
+        upcoming = [await enrich(r[0], r[1]) for r in sorted(upcoming_raw, key=lambda x: x[0].scheduled_at)]
+        history = [await enrich(r[0], r[1]) for r in history_raw]
 
         return {
             "current": current,
