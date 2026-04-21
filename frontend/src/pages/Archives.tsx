@@ -1,74 +1,450 @@
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import LayoutSidebar from '../components/LayoutSidebar';
-import { Archive, Search, Filter, Clock } from 'lucide-react';
+import {
+  Archive,
+  ChevronRight,
+  Search,
+  CreditCard,
+  Activity,
+  FileCheck,
+  ArrowRight,
+  Clock,
+  Loader2
+} from 'lucide-react';
+
+interface ArchivedCase {
+  id: string;
+  title: string;
+  department: string;
+  status: string;
+  workflowStatus: string;
+  createdAt: string;
+}
+
+interface ArchivedPatient {
+  id: string;
+  name: string;
+  age: number;
+  category: string;
+  insurers: string[];
+  diagnoses: string[];
+  cases: ArchivedCase[];
+}
+
+const API = 'http://127.0.0.1:8002';
+
+const normaliseStatus = (raw: string | null | undefined): 'none' | 'requested' | 'approved' => {
+  if (!raw) return 'none';
+  const s = raw.toLowerCase();
+  if (s === 'approved') return 'approved';
+  if (s === 'none') return 'none';
+  return 'requested';
+};
+
+const fetchArchivedPatients = async (): Promise<ArchivedPatient[]> => {
+  const token = localStorage.getItem('token');
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const response = await fetch(`${API}/api/patients/archived`, { headers });
+  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+  const json = await response.json();
+  const rawData: any[] = json.data || json;
+
+  if (!Array.isArray(rawData)) throw new Error('Data is not an array');
+
+  return rawData.map((p: any): ArchivedPatient => {
+    const cases: ArchivedCase[] = (p.medical_cases || []).map((c: any): ArchivedCase => ({
+      id: String(c.id || ''),
+      title: c.title ?? 'Untitled Case',
+      department: c.department ?? 'General',
+      status: c.status ?? 'archived',
+      workflowStatus: c.workflow_status ?? 'none',
+      createdAt: c.created_at ? c.created_at.split('T')[0] : '—'
+    }));
+
+    return {
+      id: String(p.id || ''),
+      name: p.full_name || 'Anonymous Patient',
+      age: p.age ?? 0,
+      category: p.category || 'outpatient',
+      insurers: p.insurers ?? [],
+      diagnoses: p.diagnoses ?? cases.map(c => c.title),
+      cases
+    };
+  });
+};
 
 export default function Archives() {
-  const mockArchives = [
-    { id: 'a1', patientName: 'John Doe', caseType: 'General Consultation', date: '2024-03-15', status: 'Archived' },
-    { id: 'a2', patientName: 'Jane Smith', caseType: 'Dermatology Review', date: '2024-03-10', status: 'Closed' },
-  ];
+  const navigate = useNavigate();
+
+  const [patients, setPatients] = useState<ArchivedPatient[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  useEffect(() => {
+    setLoading(true);
+    fetchArchivedPatients()
+      .then(data => {
+        setPatients(data);
+        if (data.length > 0) setSelectedPatientId(data[0].id);
+      })
+      .catch(err => console.error('[Archives] Load error:', err))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const selectedPatient = patients.find(p => p.id === selectedPatientId) ?? null;
+
+  const filteredPatients = patients.filter(p =>
+    p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    p.id.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const renderWorkflowStatus = (raw: string) => {
+    const status = normaliseStatus(raw);
+    const colors = {
+      none: { bg: 'var(--neutral-400)', text: 'var(--text-muted)' },
+      requested: { bg: '#FFF9C4', text: '#F9A825' },
+      approved: { bg: '#E8F5E9', text: '#2E7D32' }
+    };
+    const current = colors[status];
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'center' }}>
+        <div style={{
+          fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase',
+          letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: '2px'
+        }}>
+          GL STATUS
+        </div>
+        <div style={{
+          padding: '0.35rem 0.75rem', borderRadius: '9999px',
+          backgroundColor: current.bg, color: current.text,
+          fontSize: '0.75rem', fontWeight: 700, textTransform: 'capitalize'
+        }}>
+          {status}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <LayoutSidebar>
-      <div style={{ padding: 'var(--page-padding)', backgroundColor: 'var(--neutral-300)', minHeight: '100%' }}>
-        <header style={{ marginBottom: '2rem' }}>
-          <h1 style={{ fontSize: '2.5rem', fontWeight: 800, marginBottom: '0.5rem' }}>Archives</h1>
-          <p style={{ color: 'var(--text-muted)' }}>Search and retrieve historical patient records and closed cases.</p>
-        </header>
+      <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
 
-        <div className="card" style={{ marginBottom: '2rem', display: 'flex', gap: '1rem', alignItems: 'center' }}>
-          <div style={{ position: 'relative', flex: 1 }}>
-            <Search size={18} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-            <input 
-              type="text" 
-              placeholder="Search by patient name, case ID, or date..." 
-              style={{ 
-                width: '100%', 
-                padding: '0.75rem 1rem 0.75rem 2.5rem', 
-                borderRadius: '12px', 
-                border: '1px solid var(--neutral-400)',
-                backgroundColor: 'var(--neutral-200)',
-                outline: 'none'
-              }} 
-            />
+        {/* ── Left sidebar list ── */}
+        <div style={{
+          width: '350px', borderRight: '1px solid var(--neutral-400)',
+          display: 'flex', flexDirection: 'column', backgroundColor: 'var(--neutral-100)'
+        }}>
+          <div style={{ padding: '2rem 1.5rem', borderBottom: '1px solid var(--neutral-400)' }}>
+            <h1 style={{ fontSize: '1.75rem', fontWeight: 800, marginBottom: '0.25rem' }}>Archives</h1>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
+              Historical patient records
+            </p>
+            <div style={{ position: 'relative' }}>
+              <Search
+                size={18}
+                style={{
+                  position: 'absolute', left: '12px', top: '50%',
+                  transform: 'translateY(-50%)', color: 'var(--text-muted)'
+                }}
+              />
+              <input
+                type="text"
+                placeholder="Search archived patients..."
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                style={{
+                  width: '100%', padding: '0.75rem 1rem 0.75rem 2.5rem',
+                  borderRadius: '12px', border: '1px solid var(--neutral-400)',
+                  backgroundColor: 'var(--neutral-200)', outline: 'none', fontSize: '0.875rem'
+                }}
+              />
+            </div>
           </div>
-          <button className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Filter size={18} /> Filter
-          </button>
+
+          <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem' }}>
+            {loading ? (
+              <div style={{ textAlign: 'center', color: 'var(--text-muted)', paddingTop: '2rem' }}>
+                <Loader2 size={24} style={{ margin: '0 auto 0.75rem', display: 'block' }} />
+                <span style={{ fontSize: '0.875rem' }}>Loading records...</span>
+              </div>
+            ) : filteredPatients.length === 0 ? (
+              <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.875rem', paddingTop: '2rem' }}>
+                No archived patients found.
+              </div>
+            ) : (
+              <>
+                <h3 style={{
+                  fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.1em',
+                  color: 'var(--text-muted)', marginBottom: '1rem',
+                  display: 'flex', alignItems: 'center', gap: '0.5rem'
+                }}>
+                  Archived Patients
+                  <span style={{
+                    backgroundColor: 'var(--neutral-400)', padding: '2px 6px',
+                    borderRadius: '4px', fontSize: '0.65rem'
+                  }}>
+                    {filteredPatients.length}
+                  </span>
+                </h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {filteredPatients.map(p => (
+                    <div
+                      key={p.id}
+                      style={{
+                        padding: '1rem', borderRadius: '12px',
+                        backgroundColor: selectedPatientId === p.id ? 'var(--primary-fixed)' : 'white',
+                        border: selectedPatientId === p.id
+                          ? '1px solid var(--primary)'
+                          : '1px solid var(--neutral-400)',
+                        transition: 'all 0.2s ease',
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+                      }}
+                    >
+                      <div>
+                        <button
+                          onClick={() => setSelectedPatientId(p.id)}
+                          style={{
+                            fontWeight: 700,
+                            color: selectedPatientId === p.id ? 'var(--primary)' : 'var(--text-main)',
+                            marginBottom: '0.25rem', textAlign: 'left',
+                            padding: 0, background: 'none', border: 'none',
+                            fontSize: '1rem', cursor: 'pointer'
+                          }}
+                        >
+                          {p.name}
+                        </button>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', gap: '0.75rem' }}>
+                          <span>{p.age} years old</span>
+                          <span>•</span>
+                          <span>{p.cases.length} case{p.cases.length !== 1 ? 's' : ''}</span>
+                        </div>
+                      </div>
+                      <ChevronRight
+                        size={16}
+                        color={selectedPatientId === p.id ? 'var(--primary)' : 'var(--neutral-500)'}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
-        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead style={{ backgroundColor: 'var(--neutral-200)', textAlign: 'left' }}>
-              <tr>
-                <th style={{ padding: '1rem', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>Patient Name</th>
-                <th style={{ padding: '1rem', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>Case Type</th>
-                <th style={{ padding: '1rem', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>Archived Date</th>
-                <th style={{ padding: '1rem', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>Status</th>
-                <th style={{ padding: '1rem' }}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {mockArchives.map(item => (
-                <tr key={item.id} style={{ borderTop: '1px solid var(--neutral-400)' }}>
-                  <td style={{ padding: '1rem', fontWeight: 700 }}>{item.patientName}</td>
-                  <td style={{ padding: '1rem', color: 'var(--text-muted)' }}>{item.caseType}</td>
-                  <td style={{ padding: '1rem', color: 'var(--text-muted)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <Clock size={14} /> {item.date}
+        {/* ── Main content ── */}
+        <div style={{
+          flex: 1, backgroundColor: 'var(--neutral-300)',
+          overflowY: 'auto', padding: '2rem 3rem'
+        }}>
+          {selectedPatient ? (
+            <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
+
+              {/* Patient header card */}
+              <div className="card" style={{
+                marginBottom: '2rem',
+                background: 'linear-gradient(135deg, #546E7A 0%, #37474F 100%)',
+                color: 'white', padding: '2.5rem',
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                position: 'relative', overflow: 'hidden'
+              }}>
+                {/* Archived badge watermark */}
+                <Archive
+                  size={180}
+                  style={{ position: 'absolute', right: '-40px', bottom: '-40px', opacity: 0.1, color: 'white' }}
+                />
+                <div style={{ position: 'relative', zIndex: 1 }}>
+                  <div style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+                    padding: '4px 12px', borderRadius: '9999px',
+                    backgroundColor: 'rgba(255,255,255,0.2)', fontSize: '0.75rem', fontWeight: 700,
+                    textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '1rem'
+                  }}>
+                    <Archive size={12} /> Archived • {selectedPatient.category}
+                  </div>
+                  <h2 style={{ fontSize: '2.5rem', color: 'white', fontWeight: 800, marginBottom: '0.5rem' }}>
+                    {selectedPatient.name}
+                  </h2>
+                  <div style={{ display: 'flex', gap: '2rem', opacity: 0.9 }}>
+                    <div>
+                      <div style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.8, textTransform: 'uppercase' }}>Patient Age</div>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{selectedPatient.age} Years</div>
                     </div>
-                  </td>
-                  <td style={{ padding: '1rem' }}>
-                    <span style={{ backgroundColor: 'var(--neutral-400)', padding: '4px 10px', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 600 }}>
-                      {item.status}
-                    </span>
-                  </td>
-                  <td style={{ padding: '1rem', textAlign: 'right' }}>
-                    <button style={{ color: 'var(--primary)', fontWeight: 700 }}>View</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    <div>
+                      <div style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.8, textTransform: 'uppercase' }}>Total Cases</div>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{selectedPatient.cases.length}</div>
+                    </div>
+                  </div>
+                </div>
+                <div style={{ position: 'relative', zIndex: 1, textAlign: 'right' }}>
+                  <div style={{ marginBottom: '1rem' }}>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.8, textTransform: 'uppercase', marginBottom: '0.5rem' }}>Insurers</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                      {selectedPatient.insurers.length > 0
+                        ? selectedPatient.insurers.map((ins, i) => (
+                          <span key={i} style={{
+                            backgroundColor: 'white', color: '#37474F',
+                            padding: '4px 12px', borderRadius: '8px', fontSize: '0.75rem', fontWeight: 700
+                          }}>
+                            {ins}
+                          </span>
+                        ))
+                        : <span style={{ opacity: 0.6, fontSize: '0.875rem' }}>None on record</span>
+                      }
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.8, textTransform: 'uppercase', marginBottom: '0.5rem' }}>Primary Diagnosis</div>
+                    <div style={{ fontSize: '1.125rem', fontWeight: 700 }}>
+                      {selectedPatient.diagnoses[0] ?? '—'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Detail grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '2rem' }}>
+
+                {/* Left: clinical summary */}
+                <div className="card" style={{ height: 'fit-content' }}>
+                  <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <FileCheck size={18} color="var(--primary)" /> Clinical Summary
+                  </h3>
+                  <div style={{ marginBottom: '1.5rem' }}>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.75rem', textTransform: 'uppercase' }}>
+                      All Diagnoses
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      {selectedPatient.diagnoses.length > 0
+                        ? selectedPatient.diagnoses.map((d, i) => (
+                          <div key={i} style={{
+                            backgroundColor: 'var(--neutral-200)', padding: '0.75rem',
+                            borderRadius: '10px', fontSize: '0.875rem', fontWeight: 600
+                          }}>
+                            {d}
+                          </div>
+                        ))
+                        : <div style={{
+                          backgroundColor: 'var(--neutral-200)', padding: '0.75rem',
+                          borderRadius: '10px', fontSize: '0.875rem', color: 'var(--text-muted)'
+                        }}>
+                          No diagnoses recorded
+                        </div>
+                      }
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.75rem', textTransform: 'uppercase' }}>
+                      Financial Coverage
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      {selectedPatient.insurers.length > 0
+                        ? selectedPatient.insurers.map((ins, i) => (
+                          <div key={i} style={{
+                            display: 'flex', alignItems: 'center', gap: '0.75rem',
+                            backgroundColor: 'var(--neutral-200)', padding: '0.75rem', borderRadius: '10px'
+                          }}>
+                            <CreditCard size={16} color="var(--primary)" />
+                            <span style={{ fontSize: '0.875rem', fontWeight: 600 }}>{ins}</span>
+                          </div>
+                        ))
+                        : <div style={{
+                          backgroundColor: 'var(--neutral-200)', padding: '0.75rem',
+                          borderRadius: '10px', fontSize: '0.875rem', color: 'var(--text-muted)'
+                        }}>
+                          No insurers on record
+                        </div>
+                      }
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right: archived cases */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                  <h3 style={{ fontSize: '1.25rem', fontWeight: 800 }}>Medical Cases</h3>
+
+                  {selectedPatient.cases.length === 0 && (
+                    <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                      No cases found for this patient.
+                    </div>
+                  )}
+
+                  {selectedPatient.cases.map((c, i) => (
+                    <div key={c.id ?? i} className="card" style={{ padding: '0' }}>
+                      <div style={{
+                        padding: '1.5rem',
+                        display: 'grid',
+                        gridTemplateColumns: '2fr 1fr 1fr 1fr',
+                        gap: '1.5rem',
+                        alignItems: 'center'
+                      }}>
+                        {/* Case name — click navigates to case details */}
+                        <div style={{ cursor: 'pointer' }} onClick={() => navigate(`/cases/${c.id}`)}>
+                          <div style={{
+                            fontSize: '1.125rem', fontWeight: 800, color: 'var(--primary)',
+                            marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '0.5rem'
+                          }}>
+                            {c.title} <ArrowRight size={14} />
+                          </div>
+                          <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                            {c.department} Department
+                          </div>
+                        </div>
+
+                        {/* GL / Workflow status */}
+                        {renderWorkflowStatus(c.workflowStatus)}
+
+                        {/* Case status badge */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'center' }}>
+                          <div style={{
+                            fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase',
+                            letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: '2px'
+                          }}>
+                            Case Status
+                          </div>
+                          <div style={{
+                            padding: '0.35rem 0.75rem', borderRadius: '9999px',
+                            backgroundColor: 'var(--neutral-400)', color: '#455A64',
+                            fontSize: '0.75rem', fontWeight: 700, textTransform: 'capitalize'
+                          }}>
+                            {c.status}
+                          </div>
+                        </div>
+
+                        {/* Archived date */}
+                        <div style={{ textAlign: 'right' }}>
+                          <div style={{
+                            fontSize: '0.65rem', fontWeight: 800, color: 'var(--text-muted)',
+                            textTransform: 'uppercase', marginBottom: '8px'
+                          }}>
+                            Date
+                          </div>
+                          <div style={{
+                            fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-main)',
+                            display: 'flex', alignItems: 'center', gap: '0.4rem', justifyContent: 'flex-end'
+                          }}>
+                            <Clock size={13} /> {c.createdAt}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : !loading ? (
+            <div style={{
+              height: '100%', display: 'flex', flexDirection: 'column',
+              alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)'
+            }}>
+              <Archive size={64} style={{ opacity: 0.2, marginBottom: '1.5rem' }} />
+              <h3>Select a patient to view their archived records</h3>
+            </div>
+          ) : null}
         </div>
       </div>
     </LayoutSidebar>

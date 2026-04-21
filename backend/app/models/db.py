@@ -19,7 +19,7 @@ class Base(DeclarativeBase):
 # Engine and Session
 # ---------------------------------------------------------------------------
 # Note: Force the direct DB URL to bypass any stale os.environ variables trapped in uvicorn
-_DB_URL = "postgresql+asyncpg://postgres:1tzM0ZzSOS3oicsB@db.guiimyubbbrnzmzncetx.supabase.co:5432/postgres?sslmode=require"
+_DB_URL = "postgresql+asyncpg://postgres:1tzM0ZzSOS3oicsB@db.guiimyubbbrnzmzncetx.supabase.co:5432/postgres?"
 
 engine = create_async_engine(
     _DB_URL,
@@ -48,6 +48,7 @@ class Patient(Base):
     metadata_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 class Session(Base):
@@ -57,7 +58,10 @@ class Session(Base):
     patient_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("patients.id"), nullable=True)
     hospital_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("hospitals.id"), nullable=True)
     department_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("departments.id"), nullable=True)
-    doctor_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("doctors.id"), nullable=True)
+    case_type: Mapped[str] = mapped_column(String(100), nullable=True)
+    gl_status: Mapped[str] = mapped_column(String(20), default="none", nullable=False)
+    claim_status: Mapped[str] = mapped_column(String(20), default="none", nullable=False)
+    total_bill: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     conversation_history: Mapped[list] = mapped_column(JSONB, default=list)
     triage_result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     urgency_level: Mapped[str | None] = mapped_column(String(10), nullable=True)   # P1-P4
@@ -144,12 +148,7 @@ class Appointment(Base):
     doctor_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("doctors.id", ondelete="SET NULL"), nullable=True)
     scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     duration_minutes: Mapped[int] = mapped_column(Integer, default=30)
-    appointment_type: Mapped[str] = mapped_column(String(100), default="consultation")
-    urgency_level: Mapped[str] = mapped_column(String(10), nullable=False)
-    status: Mapped[str] = mapped_column(String(50), default="booked")
-    chief_complaint: Mapped[str] = mapped_column(Text, nullable=False)
-    fhir_resource: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    confirmation_sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    bill_amount: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

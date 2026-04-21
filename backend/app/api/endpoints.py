@@ -20,7 +20,7 @@ from app.auth.clerk import verify_clerk_token
 from app.cache.redis_client import redis_client
 from app.config.llm_provider import llm
 from app.config.settings import settings
-from app.models.db import AsyncSessionLocal, AuditLog, IntakeLog, Session as SessionModel, Profile, Doctor, Room, Hospital, Department, Appointment
+from app.models.db import AsyncSessionLocal, AuditLog, IntakeLog, Session as SessionModel, Profile, Doctor, Room, Hospital, Department, Appointment, Patient
 from app.services.booking_engine import booking_engine
 from app.services.intake_pipeline import intake_pipeline
 from app.services.triage_agent import triage_agent
@@ -68,38 +68,94 @@ async def _audit(
         print(f"DEBUG: Audit log failed, bypassing: {e}")
 
 # ---------------------------------------------------------------------------
-# Intake Log helper
+# Patient & Archive APIs
 # ---------------------------------------------------------------------------
-async def _log_intake(
-    session_id: str,
-    user_id: str,
-    turn_number: int,
-    user_prompt: str,
-    triage_result: dict,
-    ai_reply: str | None,
-    input_channel: str = "text"
-) -> None:
-    if "[password]" in settings.DATABASE_URL:
-        return
+
+async def _get_patient_payload(db, archived: bool = False):
+    # Fetch patients
+    stmt = select(Patient).where(Patient.archived == archived)
+    result = await db.execute(stmt)
+    patients = result.scalars().all()
+
+    payload = []
+    for p in patients:
+        # Fetch sessions for this patient
+        s_stmt = select(SessionModel).where(SessionModel.patient_id == p.id)
+        s_result = await db.execute(s_stmt)
+        sessions = s_result.scalars().all()
+
+        cases = []
+        for s in sessions:
+            # Calculate total bill from appointments
+            a_stmt = select(func.sum(Appointment.bill_amount)).where(Appointment.session_id == s.id)
+            a_result = await db.execute(a_stmt)
+            total_bill = a_result.scalar() or 0.0
+
+            cases.append({
+                "id": str(s.id),
+                "type": s.case_type or "General Consultation",
+                "department": "Medicine", # Hardcoded for now or fetch from dept
+                "glStatus": s.gl_status,
+                "claimStatus": s.claim_status,
+                "totalBill": float(total_bill)
+            })
+
+        # Calculate age
+        age = 0
+        if p.date_of_birth:
+            age = (datetime.utcnow().year - p.date_of_birth.year)
+
+        payload.append({
+            "id": str(p.id),
+            "name": p.full_name,
+            "age": age,
+            "caseCount": len(sessions),
+            "diagnoses": ["Hypertension", "Diabetes"], # Placeholder
+            "insurers": ["AIA Platinum"], # Placeholder
+            "type": "inpatient", # Default for now
+            "cases": cases
+        })
+    return payload
+
+# @router.get("/api/patients")
+# async def get_patients():
+#     async with AsyncSessionLocal() as db:
+#         return await _get_patient_payload(db, archived=False)
+
+# @router.get("/api/patients/archives")
+# async def get_archives():
+#     async with AsyncSessionLocal() as db:
+#         return await _get_patient_payload(db, archived=True)
+# async def _log_intake(
+#     session_id: str,
+#     user_id: str,
+#     turn_number: int,
+#     user_prompt: str,
+#     triage_result: dict,
+#     ai_reply: str | None,
+#     input_channel: str = "text"
+# ) -> None:
+#     if "[password]" in settings.DATABASE_URL:
+#         return
         
-    try:
-        async with AsyncSessionLocal() as db:
-            log = IntakeLog(
-                session_id=session_id,
-                clerk_user_id=user_id,
-                turn_number=turn_number,
-                user_prompt=user_prompt,
-                ai_triage_result=triage_result,
-                ai_reply=ai_reply,
-                urgency_score=triage_result.get("urgency_score"),
-                recommended_specialist=triage_result.get("recommended_specialist"),
-                confidence=triage_result.get("confidence"),
-                input_channel=input_channel,
-            )
-            db.add(log)
-            await db.commit()
-    except Exception as e:
-        print(f"DEBUG: Intake log failed, bypassing: {e}")
+#     try:
+#         async with AsyncSessionLocal() as db:
+#             log = IntakeLog(
+#                 session_id=session_id,
+#                 clerk_user_id=user_id,
+#                 turn_number=turn_number,
+#                 user_prompt=user_prompt,
+#                 ai_triage_result=triage_result,
+#                 ai_reply=ai_reply,
+#                 urgency_score=triage_result.get("urgency_score"),
+#                 recommended_specialist=triage_result.get("recommended_specialist"),
+#                 confidence=triage_result.get("confidence"),
+#                 input_channel=input_channel,
+#             )
+#             db.add(log)
+#             await db.commit()
+#     except Exception as e:
+#         print(f"DEBUG: Intake log failed, bypassing: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -1033,3 +1089,250 @@ async def health():
     status = "healthy" if all(checks.values()) else "degraded"
     code = 200 if status == "healthy" else 503
     return JSONResponse(content={"status": status, "checks": checks}, status_code=code)
+
+# ─────────────────────────────────────────────
+#  GET /api/patients  – active patients + cases
+# ─────────────────────────────────────────────
+@router.get("/api/patients")
+async def get_active_patients():
+    try:
+        # Note the select syntax: medical_cases(*) fetches the related rows
+        # via the patient_id foreign key automatically.
+        response = await supabase_rest.query_table(
+            "patients",
+            {
+                "select": "id, full_name, age, category, status, insurers, medical_cases(*)",
+                "status": "eq.active",
+                "order": "created_at.desc"
+            }
+        )
+
+        sidebar_data = {
+            "emergency": [],
+            "inpatient": [],
+            "outpatient": []
+        }
+
+        for p in response:
+            # We explicitly define the keys to prevent "all columns" from leaking
+            clean_patient = {
+                "id": p.get("id"),
+                "full_name": p.get("full_name"),
+                "age": p.get("age"),
+                "category": p.get("category"),
+                "insurers": p.get("insurers") or [],
+                # This matches your UI where cases appear under the patient
+                "cases": [
+                    {
+                        "id": c.get("id"),
+                        "title": c.get("title"),
+                        "department": c.get("department"),
+                        "status": c.get("status"),
+                        "workflow_status": c.get("workflow_status"),
+                        "created_at": c.get("created_at")
+                    } 
+                    for c in p.get("medical_cases", [])
+                ]
+            }
+            
+            # Use the Case Titles as "Diagnoses" for the UI summary for now
+            clean_patient["diagnoses"] = [c["title"] for c in clean_patient["cases"]]
+
+            cat = str(p.get("category", "")).lower()
+            if cat in sidebar_data:
+                sidebar_data[cat].append(clean_patient)
+            else:
+                sidebar_data["outpatient"].append(clean_patient)
+
+        return {
+            "success": True,
+            "data": sidebar_data
+        }
+
+    except Exception as e:
+        print(f"[API ERROR] {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+ 
+# ─────────────────────────────────────────────
+#  GET /api/patients/{patient_id}/cases
+#  Single patient detail with cases
+# ─────────────────────────────────────────────
+@router.get("/api/patients/{patient_id}/cases")
+async def get_patient_detail_with_cases(patient_id: str):
+    try:
+        print(f"[PATIENT_DETAIL] Fetching patient {patient_id}")
+ 
+        response = await supabase_rest.query_table(
+            "patients",
+            {
+                "select": """
+                    id,
+                    full_name,
+                    age,
+                    insurers,
+                    category,
+                    medical_cases (
+                        id,
+                        title,
+                        department,
+                        status,
+                        workflow_status,
+                        has_medical_bill,
+                        created_at
+                    )
+                """,
+                "id": f"eq.{patient_id}"
+            }
+        )
+ 
+        if not response:
+            raise HTTPException(status_code=404, detail="Patient not found")
+ 
+        data = response[0] if isinstance(response, list) else response
+        cases = data.get("medical_cases", [])
+ 
+        return {
+            "patient": {k: v for k, v in data.items() if k != "medical_cases"},
+            "cases": cases
+        }
+ 
+    except Exception as e:
+        print(f"[PATIENT_DETAIL] ERROR: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+ 
+ 
+# ─────────────────────────────────────────────
+#  GET /api/cases/{case_id}/appointments
+#
+#  medical_cases.appointment_ids is a uuid[]
+#  with NO foreign key, so we:
+#    1. fetch the case to get appointment_ids array
+#    2. fetch appointments whose id is in that array
+# ─────────────────────────────────────────────
+@router.get("/api/cases/{case_id}/appointments")
+async def get_case_timeline(case_id: str):
+    try:
+        print(f"[CASE_TIMELINE] Fetching case {case_id}")
+
+        # Step 1 – get case
+        case_response = await supabase_rest.query_table(
+            "medical_cases",
+            {
+                "select": "id, title, department, status, workflow_status",
+                "id": f"eq.{case_id}"
+            }
+        )
+
+        if not case_response:
+            raise HTTPException(status_code=404, detail="Case not found")
+
+        case_data = case_response[0]
+
+        # Step 2 – fetch appointments directly via case_id
+        appointments = await supabase_rest.query_table(
+            "appointments",
+            {
+                "select": """
+                    id,
+                    scheduled_at,
+                    appointment_type,
+                    urgency_level,
+                    chief_complaint,
+                    outcome_summary,
+                    status,
+                    duration_minutes,
+                    ward,
+                    bill_id,
+                    case_id,
+                    doctors (
+                        id,
+                        full_name
+                    )
+                """,
+                "case_id": f"eq.{case_id}",
+                "order": "scheduled_at.asc"
+            }
+        )
+
+        # Step 3 – bills (unchanged)
+        bill_ids = [a.get("bill_id") for a in appointments if a.get("bill_id")]
+        bills_by_id = {}
+
+        if bill_ids:
+            bills = await supabase_rest.query_table(
+                "medical_bills",
+                {
+                    "select": "id, total_bill, status, file_url",
+                    "id": f"in.({','.join(bill_ids)})"
+                }
+            )
+            bills_by_id = {b["id"]: b for b in bills}
+
+        enriched = []
+        for apt in appointments:
+            bill_info = bills_by_id.get(apt.get("bill_id"), {})
+            enriched.append({
+                **apt,
+                "total_bill": float(bill_info.get("total_bill", 0)),
+                "bill_status": bill_info.get("status"),
+                "bill_file_url": bill_info.get("file_url"),
+            })
+
+        return {
+            "success": True,
+            "case": case_data,
+            "data": enriched
+        }
+
+    except Exception as e:
+        print(f"[CASE_TIMELINE] ERROR: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+ 
+ 
+# ─────────────────────────────────────────────
+#  GET /api/patients/archived
+# ─────────────────────────────────────────────
+@router.get("/api/patients/archived")
+async def get_archived_patients():
+    try:
+        print("[PATIENTS] Fetching archived patients...")
+ 
+        response = await supabase_rest.query_table(
+            "patients",
+            {
+                "select": """
+                    id,
+                    full_name,
+                    age,
+                    category,
+                    insurers,
+                    diagnoses,
+                    medical_cases (
+                        id,
+                        title,
+                        department,
+                        status,
+                        workflow_status,
+                        has_medical_bill,
+                        created_at
+                    )
+                """,
+                "status": "eq.archived",
+                "order": "created_at.desc"
+            }
+        )
+ 
+        print(f"[PATIENTS] Archived success. Count = {len(response)}")
+ 
+        return {
+            "success": True,
+            "count": len(response),
+            "data": response
+        }
+ 
+    except Exception as e:
+        print(f"[PATIENTS] ARCHIVED ERROR: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={"success": False, "error": str(e)}
+        )
