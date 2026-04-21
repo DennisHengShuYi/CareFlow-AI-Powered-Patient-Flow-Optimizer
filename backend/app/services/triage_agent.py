@@ -15,8 +15,9 @@ import re
 from typing import Literal
 
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, func
 
+from app.models.db import AsyncSessionLocal, MedicalKBEmbedding
 from app.config.llm_provider import llm
 from app.config.settings import settings
 
@@ -47,48 +48,26 @@ class TriageResult(BaseModel):
 _SYSTEM_TEMPLATE = """\
 You are an expert bilingual clinical triage AI assistant operating in a Malaysian hospital.
 
-LANGUAGE RULE: Mirror the user's language EXACTLY for all output fields (follow_up_questions, chief_complaint, reasoning_chain). \
-If the user writes in English, you MUST respond in English. If they use Bahasa Malaysia, use Bahasa Malaysia. \
-If they mix both (Social Media / Manglish style), you may respond with a similar mix, but prioritize clarity.
+LANGUAGE RULE: Mirror the user's language EXACTLY for all output fields (follow_up_questions, chief_complaint, reasoning_chain).
+- If the user writes in English, you MUST respond in English.
+- If they use Bahasa Malaysia, you MUST use Bahasa Malaysia.
+- If they mix both (Social Media / Manglish style), respond with a similar natural mix.
 
 CHAIN-OF-THOUGHT — You MUST produce exactly 4 reasoning steps in `reasoning_chain`:
-  1. List every symptom mentioned.
-  2. Identify all red flags explicitly (e.g. jaw radiation, rigors, stroke signs).
-  3. Reason about duration and severity of each symptom.
-  4. Produce the urgency score P1-P4 with justification.
-Never skip to the score without completing steps 1-3.
+  1. List every symptom mentioned (in user's language).
+  2. Identify every Clinical Red Flag (even if subtle) and map it to risk.
+  3. Correlate duration and severity with clinical guidelines.
+  4. THE JUDGE (Safety Check): Verify if identified Red Flags require a higher P-score than originally thought. Justify why the chosen P-score safely covers the absolute worst-case scenario.
 
-URGENCY DEFINITIONS:
-  P1 = Immediately life-threatening (resuscitation now)
-  P2 = Emergent (seen within 15 min)
-  P3 = Urgent (seen within 30-60 min)
-  P4 = Semi-urgent / non-urgent (can wait)
+SPECIALIST NAMES: You MUST recommend a specialist from the provided live list ONLY. 
+- Format: [Translated Name] ([Exact Technical Name from List]).
+- Example: If the list has "General Medicine", output "Klinik Am (General Medicine)".
+- The parenthetical part MUST match an item in the live list exactly.
+- If no specific match is found, fallback to "Perubatan Am (General Medicine)".
 
 FEW-SHOT EXAMPLES:
 
---- Example 1 (English, P4 with Follow-up) ---
-Input: "My ankle is swollen since this morning."
-Output:
-{{
-  "chief_complaint": "Swollen ankle since this morning",
-  "symptoms": [
-    {{"name": "Ankle swelling", "severity": "moderate", "duration": "today"}}
-  ],
-  "red_flags": [],
-  "urgency_score": "P4",
-  "recommended_specialist": "Orthopaedics",
-  "follow_up_questions": ["Can you bear weight on the foot?", "Was there any direct trauma or a 'pop' sound?"],
-  "confidence": 0.85,
-  "reasoning_chain": [
-    "1. Symptoms: Swollen ankle.",
-    "2. Red flags: None reported yet, but need to check for weight-bearing status.",
-    "3. Moderate severity, very recent onset (today).",
-    "4. Urgency P4: Likely a simple sprain, but requires follow-up for safety."
-  ],
-  "language_detected": "en"
-}}
-
---- Example 2 (English, P1) ---
+--- Example 1 (English, P1) ---
 Input: "I have a crushing chest pain that radiates to my jaw and I'm very short of breath."
 Output:
 {{
@@ -99,92 +78,64 @@ Output:
   ],
   "red_flags": ["Crushing chest pain", "Jaw radiation — suggests ischaemia", "Shortness of breath"],
   "urgency_score": "P1",
-  "recommended_specialist": "Emergency / Cardiology",
+  "recommended_specialist": "Unit Kecemasan (Emergency Department)",
   "follow_up_questions": [],
-  "confidence": 0.97,
+  "confidence": 0.99,
   "reasoning_chain": [
     "1. Symptoms: crushing chest pain, shortness of breath.",
-    "2. Red flags: jaw radiation strongly suggests STEMI; crushing quality indicates ischaemia.",
-    "3. Acute onset, severe intensity — no mitigating factors reported.",
-    "4. Urgency P1: immediate resuscitation intervention required."
+    "2. Red flags: jaw radiation strongly suggests ischaemia/STEMI.",
+    "3. Acute onset of severe pain requires immediate protocol activation.",
+    "4. THE JUDGE: Symptoms are life-threatening Red Flags. P1 is the only safe categorization for immediate intervention."
   ],
   "language_detected": "en"
 }}
 
---- Example 3 (Code-switched BM+EN, P2) ---
+--- Example 2 (Code-switched BM+EN, P2) ---
 Input: "Demam panas gila for 3 hari dan menggigil teruk (rigors)."
 Output:
 {{
-  "chief_complaint": "High fever with rigors for 3 days",
+  "chief_complaint": "Demam panas (high fever) dengan rigors selama 3 hari",
   "symptoms": [
     {{"name": "Fever", "severity": "high", "duration": "3 days"}},
-    {{"name": "Rigors", "severity": "moderate", "duration": "3 days"}}
+    {{"name": "Rigors", "severity": "severe", "duration": "3 days"}}
   ],
-  "red_flags": ["Rigors with high fever > 3 days — possible sepsis or malaria"],
+  "red_flags": ["Rigors with high fever > 3 days — suspicious for sepsis"],
   "urgency_score": "P2",
-  "recommended_specialist": "General Medicine / Infectious Disease",
+  "recommended_specialist": "Perubatan Am (General Medicine)",
   "follow_up_questions": ["Adakah anda baru balik dari kawasan malaria?", "Adakah ada batuk atau sesak nafas?"],
-  "confidence": 0.83,
+  "confidence": 0.95,
   "reasoning_chain": [
-    "1. Symptoms: high fever, rigors.",
-    "2. Red flags: rigors + fever > 3 days raises suspicion of sepsis or malaria.",
-    "3. Moderate severity persisting 3 days; no reported resolution.",
-    "4. Urgency P2: emergent assessment needed within 15 minutes."
+    "1. Simptom: demam panas, menggigil teruk (rigors).",
+    "2. Red flags: rigors + demam > 3 hari suggests serious systemic infection.",
+    "3. Keparahan tinggi dengan risiko sepsis jika tidak dirawat segera.",
+    "4. THE JUDGE: While not yet unconscious, 'Rigors' are a high-risk indicator. P2 is mandatory to ensure patient is seen within 15 mins."
   ],
   "language_detected": "mixed"
 }}
 
---- Example 4 (Bahasa Malaysia, P4) ---
+--- Example 3 (Bahasa Malaysia, P4) ---
 Input: "Sakit tekak sikit dari semalam sahaja."
 Output:
 {{
-  "chief_complaint": "Mild sore throat since yesterday",
+  "chief_complaint": "Sakit tekak ringan sejak semalam",
   "symptoms": [
-    {{"name": "Sakit tekak", "severity": "mild", "duration": "1 day"}}
+    {{"name": "Sakit tekak", "severity": "ringan", "duration": "1 hari"}}
   ],
   "red_flags": [],
   "urgency_score": "P4",
-  "recommended_specialist": "General Practice (GP)",
-  "follow_up_questions": [],
+  "recommended_specialist": "Perubatan Am (General Medicine)",
+  "follow_up_questions": ["Adakah anda mengalami kesukaran menelan atau bernafas?"],
   "confidence": 0.95,
   "reasoning_chain": [
-    "1. Symptoms: mild sore throat.",
-    "2. Red flags: none identified.",
-    "3. Low severity, very short duration (1 day), no systemic features.",
-    "4. Urgency P4: non-urgent, routine GP visit appropriate."
+    "1. Simptom: sakit tekak ringan.",
+    "2. Red flags: tiada tanda bahaya dikesan setakat ini.",
+    "3. Keparahan rendah, tempoh singkat (1 hari).",
+    "4. THE JUDGE: No red flags present. P4 is safe for standard clinical follow-up."
   ],
   "language_detected": "ms"
 }}
 
 OUTPUT RULE: Return ONLY raw JSON matching the schema above. No markdown fences. No extra keys.
-
-RECOMMENDED_SPECIALIST RULE: The `recommended_specialist` field MUST be exactly one value from this approved list:
-  - Emergency Department
-  - General Medicine
-  - Pediatrics
-  - Obstetrics & Gynecology
-  - General Surgery
-  - Cardiology
-  - Orthopedics
-  - Oncology
-  - Neurology
-  - Psychiatry
-  - Dermatology
-  - Gastroenterology
-  - Urology
-  - Radiology
-  - Pathology / Laboratory
-  - Pharmacy
-  - Rehabilitation / Physiotherapy
-  - Intensive Care Unit (ICU)
-  - Neonatal ICU (NICU)
-  - Operating Theater
-  - General Practice (GP)
-  - Dental Clinic
-  - Ophthalmology
-  - ENT (Ear, Nose & Throat)
-
-Do NOT use free-form text or invent a new specialty. Pick the closest match from the list above.
 """
 
 # ---------------------------------------------------------------------------
@@ -205,15 +156,52 @@ def sanitise(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Standard Catalog Fallback
+# ---------------------------------------------------------------------------
+STANDARD_CATALOG = [
+    "Emergency Department", "General Medicine", "Pediatrics", "Obstetrics & Gynecology",
+    "General Surgery", "Cardiology", "Orthopedics", "Oncology", "Neurology", "Psychiatry",
+    "Dermatology", "Gastroenterology", "Urology", "Radiology", "Pathology / Laboratory",
+    "Pharmacy", "Rehabilitation / Physiotherapy", "Intensive Care Unit (ICU)",
+    "Neonatal ICU (NICU)", "Operating Theater", "General Practice (GP)", "Dental Clinic",
+    "Ophthalmology", "ENT (Ear, Nose & Throat)"
+]
+
+# ---------------------------------------------------------------------------
 # Triage agent
 # ---------------------------------------------------------------------------
 class TriageAgent:
+    async def _retrieve_clinical_context(self, text: str) -> str:
+        """Fetch top-3 most relevant MOH guideline chunks from vector DB."""
+        try:
+            vector = await llm.embed(text)
+            async with AsyncSessionLocal() as db:
+                # Similarity search using <=> operator (cosine distance) via pgvector
+                # We order by distance ascending (top matches have smallest distance)
+                stmt = select(MedicalKBEmbedding.content).order_by(
+                    MedicalKBEmbedding.embedding.cosine_distance(vector)
+                ).limit(3)
+                
+                res = await db.execute(stmt)
+                chunks = res.scalars().all()
+                
+                if not chunks:
+                    return ""
+                
+                context = "\n\nOFFICIAL CLINICAL GUIDELINES (MOH):\n"
+                context += "\n---\n".join(chunks)
+                context += "\n\nINSTRUCTION: Use the above guidelines to ground your triage decision and reasoning."
+                return context
+        except Exception as e:
+            print(f"DEBUG: RAG Retrieval failed: {e}")
+            return ""
 
     async def analyze(
         self,
         user_text: str,
         session_id: str,
         turn_history: list[dict] | None = None,
+        available_departments: list[str] | None = None,
     ) -> dict:
         """
         Run one triage turn. Returns TriageResult dict.
@@ -222,7 +210,15 @@ class TriageAgent:
           - Appending turns to Redis after this returns
         """
         safe_input = sanitise(user_text)
-        system_prompt = _SYSTEM_TEMPLATE
+        
+        # Determine department constraint
+        live_depts = available_departments if available_departments else STANDARD_CATALOG
+        dept_constraint = f"STRICT CONSTRAINT: You MUST recommend a specialist from this list ONLY: {', '.join(live_depts)}."
+        
+        # 2. Retrieve Clinical Guidelines (RAG)
+        rag_context = await self._retrieve_clinical_context(user_text)
+        
+        system_prompt = f"{_SYSTEM_TEMPLATE}\n\n{dept_constraint}{rag_context}"
 
         # Build prompt with conversation history
         history_block = ""

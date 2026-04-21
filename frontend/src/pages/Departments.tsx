@@ -232,7 +232,7 @@ export default function Departments() {
 
   return (
     <LayoutSidebar>
-      <div style={{ padding: '2rem 3rem', height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+      <div className="responsive-padding departments-page" style={{ height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
 
         {/* Toast Notification */}
         {toast && (
@@ -260,7 +260,7 @@ export default function Departments() {
             Manage real-time clinical flow. Add doctors, allocate rooms, and track patient movement across your hospital.
           </p>
 
-          <div style={{ display: 'inline-flex', background: 'var(--neutral-200)', borderRadius: '12px', padding: '4px', gap: '4px' }}>
+          <div className="departments-tab-toggle" style={{ display: 'inline-flex', background: 'var(--neutral-200)', borderRadius: '12px', padding: '4px', gap: '4px' }}>
             <button
               onClick={() => setTab('board')}
               style={{
@@ -370,7 +370,7 @@ export default function Departments() {
                 <div style={{ background: '#ffa726', color: 'white', padding: '8px', borderRadius: '8px' }}><HospitalIcon size={20} /></div>
                 <h3 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0 }}>Create Department (Unit)</h3>
               </div>
-              <div style={{ display: 'flex', gap: '1rem' }}>
+              <div className="departments-inline-form" style={{ display: 'flex', gap: '1rem' }}>
                 <select
                   value={newDeptName}
                   onChange={(e) => setNewDeptName(e.target.value)}
@@ -392,7 +392,7 @@ export default function Departments() {
               </div>
             </section>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+            <div className="departments-manage-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
               {/* Add Room Section */}
               <section className="card" style={{ padding: '1.5rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.25rem' }}>

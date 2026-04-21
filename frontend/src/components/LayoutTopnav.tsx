@@ -12,20 +12,15 @@ export default function LayoutTopnav({ children, pageType = 'default' }: { child
 
   return (
     <div className="layout-app flex-col" style={{ backgroundColor: 'var(--neutral-100)' }}>
-      <header style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '1rem 3rem',
-        borderBottom: '1px solid var(--neutral-400)',
-        backgroundColor: 'var(--neutral-100)'
-      }}>
+      <header className="topnav-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <div style={{ width: '32px', height: '32px', borderRadius: '10px', background: 'var(--primary)', color: 'white', display: 'flex', justifyContent: 'center', alignItems: 'center', fontWeight: 'bold' }}>+</div>
           <Link to="/landing"><h2 style={{ fontSize: '1.25rem', color: 'var(--secondary)' }}>MediRoute</h2></Link>
         </div>
 
         {pageType === 'default' && (
-          <nav style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
-            <ul style={{ listStyle: 'none', padding: 0, display: 'flex', gap: '2rem' }}>
+          <nav className="topnav-links">
+            <ul>
               {links.map(link => {
                 const active = location.pathname === link.path;
                 return (
@@ -45,7 +40,7 @@ export default function LayoutTopnav({ children, pageType = 'default' }: { child
           </nav>
         )}
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+        <div className="topnav-actions">
           {pageType === 'default' ? (
             <>
               <button className="btn-secondary" style={{ padding: '0.5rem 1rem' }}>Help</button>

@@ -1,13 +1,13 @@
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
-import { SignIn, SignUp, SignedIn, SignedOut, RedirectToSignIn, useUser } from '@clerk/clerk-react';
-import React, { useState, useEffect } from 'react';
-import { supabase } from './lib/supabase';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { SignIn, SignUp, RedirectToSignIn, useUser } from '@clerk/clerk-react';
 import LiveTriage from './pages/LiveTriage';
 import Landing from './pages/Landing';
 import Claims from './pages/Claims';
 import Intake from './pages/Intake';
 import Departments from './pages/Departments';
 import Appointments from './pages/Appointments';
+import MyAppointments from './pages/MyAppointments';
+import NearbyFacilities from './pages/NearbyFacilities';
 import Patients from './pages/Patients';
 import CaseDetails from './pages/CaseDetails';
 import Archives from './pages/Archives';
@@ -21,7 +21,7 @@ function HomeDispatcher() {
 
   if (loading) {
     return (
-      <div style={{ height: '100vh', width: '100vw', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-gradient)' }}>
+      <div style={{ height: '100vh', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-gradient)' }}>
         <Loader2 size={40} className="animate-spin text-primary" />
       </div>
     );
@@ -38,12 +38,11 @@ function HomeDispatcher() {
 function ProtectedRoute({ children, allowedRoles }: { children: React.ReactNode, allowedRoles?: string[] }) {
   const { isLoaded, isSignedIn } = useUser();
   const { role, profile, loading: profileLoading } = useProfile();
-  const navigate = useNavigate();
 
   // If still loading Clerk or Supabase profile
   if (!isLoaded || (isSignedIn && profileLoading)) {
     return (
-      <div style={{ height: '100vh', width: '100vw', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-gradient)' }}>
+      <div style={{ height: '100vh', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-gradient)' }}>
         <Loader2 size={40} className="animate-spin text-primary" />
       </div>
     );
@@ -51,7 +50,7 @@ function ProtectedRoute({ children, allowedRoles }: { children: React.ReactNode,
 
   // If not signed in at all
   if (!isSignedIn) {
-    return <RedirectToSignIn signInUrl="/sign-in" />;
+    return <RedirectToSignIn />;
   }
 
   // If signed in but no profile (hasn't picked a role)
@@ -82,7 +81,7 @@ function App() {
         <Route
           path="/sign-in/*"
           element={
-            <div style={{ display: 'flex', width: '100vw', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-gradient)' }}>
+            <div style={{ display: 'flex', width: '100%', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-gradient)' }}>
               <SignIn
                 routing="path"
                 path="/sign-in"
@@ -115,7 +114,7 @@ function App() {
         <Route
           path="/sign-up/*"
           element={
-            <div style={{ display: 'flex', width: '100vw', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-gradient)' }}>
+            <div style={{ display: 'flex', width: '100%', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-gradient)' }}>
               <SignUp
                 routing="path"
                 path="/sign-up"
@@ -128,7 +127,7 @@ function App() {
                     colorBackground: '#ffffff',
                     fontFamily: '"Inter", sans-serif',
                   },
-                  Elements: {
+                  elements: {
                     card: {
                       boxShadow: '0 20px 40px rgba(227, 242, 253, 0.8)',
                       border: '1px solid var(--neutral-400)',
@@ -159,7 +158,9 @@ function App() {
         {/* Patient Routes */}
         <Route path="/intake" element={<ProtectedRoute allowedRoles={['patient']}><Intake /></ProtectedRoute>} />
         <Route path="/departments" element={<ProtectedRoute allowedRoles={['hospital_staff']}><Departments /></ProtectedRoute>} />
+        <Route path="/nearby-facilities" element={<ProtectedRoute allowedRoles={['patient']}><NearbyFacilities /></ProtectedRoute>} />
         <Route path="/appointments" element={<ProtectedRoute allowedRoles={['patient']}><Appointments /></ProtectedRoute>} />
+        <Route path="/my-appointments" element={<ProtectedRoute allowedRoles={['patient']}><MyAppointments /></ProtectedRoute>} />
 
         {/* Fallback */}
         <Route path="*" element={<Navigate to="/" replace />} />

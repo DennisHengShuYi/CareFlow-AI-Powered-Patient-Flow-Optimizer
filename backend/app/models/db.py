@@ -4,6 +4,7 @@ from sqlalchemy import String, Integer, Float, ForeignKey, DateTime, Text, Boole
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from pgvector.sqlalchemy import Vector
 
 from app.config.settings import settings
 
@@ -188,4 +189,18 @@ class IntakeLog(Base):
     recommended_specialist: Mapped[str | None] = mapped_column(String(255), nullable=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     input_channel: Mapped[str] = mapped_column(String(50), default="text")   # text | voice | document
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class MedicalKBEmbedding(Base):
+    """
+    Stores clinical guidelines (e.g. from MOH PDFs) as chunked text with 
+    vector embeddings for semantic retrieval.
+    """
+    __tablename__ = "medical_kb_embeddings"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(Vector(1024)) # BGE-M3 is 1024
+    metadata_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True) # {source: pdf, page: X, chapter: Y}
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

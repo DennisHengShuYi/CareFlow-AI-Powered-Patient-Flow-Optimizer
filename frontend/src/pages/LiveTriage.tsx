@@ -214,7 +214,7 @@ export default function LiveTriage() {
   if (loading) {
     return (
       <LayoutSidebar>
-        <div style={{ padding: '2rem 3rem', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className="responsive-padding" style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div style={{ fontSize: '1.25rem', color: 'var(--text-muted)' }}>Loading live stream... Ensure backend is running.</div>
         </div>
       </LayoutSidebar>
@@ -253,7 +253,7 @@ export default function LiveTriage() {
 
   return (
     <LayoutSidebar>
-      <div style={{ padding: '2rem 3rem', height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div className="responsive-padding live-triage-page" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
         
         {/* Header Section */}
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '2rem', flexWrap: 'wrap', gap: '1.5rem' }}>
@@ -305,7 +305,7 @@ export default function LiveTriage() {
               </div>
             )}
           </div>
-          <div style={{ display: 'flex', gap: '1rem' }}>
+          <div className="triage-top-actions" style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
             <button 
               onClick={() => setShowAddModal(true)}
               className="btn-primary" 
@@ -351,8 +351,8 @@ export default function LiveTriage() {
                     </div>
                 </div>
 
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', background: 'white', borderRadius: '12px', padding: '0.75rem 1rem', border: '1px solid var(--neutral-400)', flex: 1, maxWidth: '400px' }}>
+                <div className="triage-queue-controls" style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <div className="triage-search-box" style={{ display: 'flex', alignItems: 'center', background: 'white', borderRadius: '12px', padding: '0.75rem 1rem', border: '1px solid var(--neutral-400)', flex: 1, maxWidth: '400px' }}>
                     <Search size={18} color="var(--text-muted)" style={{ marginRight: '0.75rem' }} />
                     <input 
                       type="text" 
@@ -382,7 +382,7 @@ export default function LiveTriage() {
                 </div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr 2fr 1fr auto', gap: '1rem', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', paddingBottom: '1rem', borderBottom: '1px solid var(--neutral-400)', marginBottom: '1rem' }}>
+              <div className="triage-queue-table-header" style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr 2fr 1fr auto', gap: '1rem', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', paddingBottom: '1rem', borderBottom: '1px solid var(--neutral-400)', marginBottom: '1rem' }}>
                 <div>Urgency</div>
                 <div>Patient</div>
                 <div>Diagnosis & Complaint</div>
@@ -413,6 +413,7 @@ export default function LiveTriage() {
                     <div 
                       key={patient.id} 
                       onClick={() => handleSelectPatient(patient.id)}
+                      className="triage-queue-row"
                       style={{ 
                         background: isCritical ? '#fffcfc' : 'white', 
                         border: isActiveEncounter
@@ -749,7 +750,7 @@ export default function LiveTriage() {
 
                 <div>
                    <h3 style={{ fontSize: '0.75rem', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>Triage Vitals Summary</h3>
-                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
+                   <div className="triage-vitals-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
                      <div style={{ background: 'var(--neutral-200)', padding: '1.25rem', borderRadius: '12px' }}>
                        <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 600, marginBottom: '0.25rem' }}>BLOOD PRESSURE</div>
                        <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{data.ai_scribe?.vitals?.bp || "-"}</div>
@@ -858,7 +859,7 @@ export default function LiveTriage() {
 
                 </div>
 
-                <div style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--neutral-400)' }}>
+                <div className="triage-action-row" style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--neutral-400)' }}>
                   <button type="button" className="btn-secondary" onClick={handleCancelEncounter} style={{ flex: 1, background: 'var(--neutral-100)', border: '1px solid var(--neutral-400)' }}>Cancel</button>
                   <button 
                     className="btn-primary" 
@@ -1064,7 +1065,7 @@ export default function LiveTriage() {
               </select>
             </div>
 
-            <div style={{ marginBottom: '2.5rem', display: 'flex', gap: '1rem' }}>
+            <div className="triage-override-grid" style={{ marginBottom: '2.5rem', display: 'flex', gap: '1rem' }}>
               <div style={{ flex: 1 }}>
                 <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Department</label>
                 <select 

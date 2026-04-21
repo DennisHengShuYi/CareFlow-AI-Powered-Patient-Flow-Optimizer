@@ -1,12 +1,12 @@
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, FileText, Building, Calendar, Archive } from 'lucide-react';
-import { SignedIn, SignedOut, UserButton, useClerk } from '@clerk/clerk-react';
+import { LayoutDashboard, Users, FileText, Building, Calendar, Map, Archive } from 'lucide-react';
+import { SignedIn, SignedOut, UserButton } from '@clerk/clerk-react';
 import { useProfile } from '../hooks/useProfile';
 import { ShieldCheck } from 'lucide-react';
 
 export default function LayoutSidebar({ children }: { children: React.ReactNode }) {
   const location = useLocation();
-  const { role, profile, loading: profileLoading } = useProfile();
+  const { role, profile } = useProfile();
 
   const allLinks = [
     { name: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['hospital_staff'] },
@@ -15,7 +15,9 @@ export default function LayoutSidebar({ children }: { children: React.ReactNode 
     { name: 'Claims', path: '/claims', icon: FileText, roles: ['hospital_staff'] },
     { name: 'Archives', path: '/archives', icon: Archive, roles: ['hospital_staff'] },
     { name: 'Departments', path: '/departments', icon: Building, roles: ['hospital_staff'] },
+    { name: 'Nearby Facilities', path: '/nearby-facilities', icon: Map, roles: ['patient'] },
     { name: 'Appointments', path: '/appointments', icon: Calendar, roles: ['patient'] },
+    { name: 'My Appointments', path: '/my-appointments', icon: Calendar, roles: ['patient'] },
   ];
 
   // Filter links based on role
@@ -32,15 +34,12 @@ export default function LayoutSidebar({ children }: { children: React.ReactNode 
           backgroundColor: 'var(--neutral-100)',
           display: 'flex',
           flexDirection: 'column',
-          padding: '2rem 0',
+          padding: 'var(--sidebar-block-padding) 0',
           borderRight: '1px solid var(--neutral-400)',
           transition: 'width 0.3s ease',
         }}
       >
-        <div
-          style={{ padding: '0 2rem', marginBottom: '3rem', display: 'flex', alignItems: 'center', gap: '0.75rem', overflow: 'hidden' }}
-          className="center-on-mobile"
-        >
+        <div className="sidebar-brand center-on-mobile">
           <div style={{ width: '32px', height: '32px', minWidth: '32px', borderRadius: '50%', background: 'var(--primary)', color: 'white', display: 'flex', justifyContent: 'center', alignItems: 'center', fontWeight: 'bold' }}>+</div>
           <Link to="/" style={{ whiteSpace: 'nowrap' }} className="hide-on-mobile">
             <h2 style={{ fontSize: '1.25rem', color: 'var(--secondary)' }}>CareFlow</h2>
@@ -49,7 +48,7 @@ export default function LayoutSidebar({ children }: { children: React.ReactNode 
         </div>
 
         {role === 'patient' && (
-          <div style={{ padding: '0 1.5rem', marginBottom: '2rem', overflow: 'hidden' }} className="center-on-mobile">
+          <div className="sidebar-cta-wrap center-on-mobile">
             <Link
               to="/intake"
               className="btn-primary w-full flex items-center justify-center gap-2"
@@ -69,16 +68,12 @@ export default function LayoutSidebar({ children }: { children: React.ReactNode 
                   <Link
                     to={link.path}
                     style={{
-                      display: 'flex', alignItems: 'center', gap: '1rem',
-                      padding: '1rem 2rem',
                       color: active ? 'var(--secondary)' : 'var(--text-muted)',
                       backgroundColor: active ? 'var(--neutral-200)' : 'transparent',
                       borderRight: active ? '4px solid var(--primary)' : 'none',
                       fontWeight: active ? 600 : 500,
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
                     }}
-                    className="center-on-mobile"
+                    className="sidebar-nav-link center-on-mobile"
                   >
                     <div style={{ minWidth: '20px' }}><link.icon size={20} /></div>
                     <span className="hide-on-mobile">{link.name}</span>
@@ -89,7 +84,7 @@ export default function LayoutSidebar({ children }: { children: React.ReactNode 
           </ul>
         </nav>
 
-        <div style={{ padding: '2rem 1.5rem 0', borderTop: '1px solid var(--neutral-400)', display: 'flex', flexDirection: 'column', gap: '1.5rem', overflow: 'hidden' }}>
+        <div className="sidebar-footer">
           <SignedIn>
             <div className="flex items-center gap-3 center-on-mobile">
               <UserButton />
