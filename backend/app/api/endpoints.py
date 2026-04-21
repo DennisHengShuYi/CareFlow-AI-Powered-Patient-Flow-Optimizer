@@ -326,8 +326,13 @@ async def intake_text(
         # 4. Multi-Agent Triage Pipeline (Global Discovery)
         print("DEBUG: [Stage 3] Calling Global Multi-Agent Triage...")
         
-        # We now use the Global-to-Local pipeline (decisions are hospital-agnostic initially)
-        pipeline_output = await triage_orchestrator.run_pipeline(raw, language_preference=language_preference)
+        # We now pass 'history' so the AI can remember previous turns (Context-Aware)
+        pipeline_output = await triage_orchestrator.run_pipeline(
+            raw, 
+            language_preference=language_preference,
+            history=history
+        )
+
 
         # Map pipeline output to the frontend expected format
         decision = pipeline_output.get("decision", {})
@@ -376,11 +381,12 @@ async def intake_text(
         lang = result.get("language_detected", "en")
         complete_msg = "Triage selesai" if lang == "ms" else "Triage complete"
         
-        await redis_client.append_turn(session_id, {"role": "user", "content": raw})
+        await redis_client.append_turn(session_id, {"role": "user", "text": raw})
         await redis_client.append_turn(
             session_id,
-            {"role": "agent", "content": follow_up_q or complete_msg},
+            {"role": "assistant", "text": follow_up_q or complete_msg},
         )
+
 
         # 7. Persist session to DB (Wrapped in resilience block)
         print("DEBUG: [Stage 5] Auditing and returning...")

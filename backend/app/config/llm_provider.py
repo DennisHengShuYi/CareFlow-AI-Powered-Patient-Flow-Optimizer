@@ -213,20 +213,22 @@ class LLMProvider:
         )
         return result.tolist()
 
+    def _get_hf_client(self):
+        if not hasattr(self, "_hf_client") or self._hf_client is None:
+            from huggingface_hub import AsyncInferenceClient
+            self._hf_client = AsyncInferenceClient(token=settings.HUGGINGFACE_API_KEY)
+        return self._hf_client
+
     async def _huggingface_embed(self, text: str | list[str]) -> list[float] | list[list[float]]:
         """Generate embeddings using HuggingFace Inference Client."""
         if not settings.HUGGINGFACE_API_KEY:
              raise ValueError("HUGGINGFACE_API_KEY is not set in .env")
 
-        from huggingface_hub import AsyncInferenceClient
-        client = AsyncInferenceClient(token=settings.HUGGINGFACE_API_KEY)
+        client = self._get_hf_client()
         
         try:
             # feature_extraction returns the vector(s)
             result = await client.feature_extraction(text, model=settings.EMBEDDING_MODEL)
-            
-            # If it's a single string, result is [dim1, dim2, ...]
-            # If it's a list of strings, result is [[dim1, ...], [dim1, ...]]
             
             if hasattr(result, "tolist"):
                 return result.tolist()
@@ -235,6 +237,7 @@ class LLMProvider:
         except Exception as e:
             print(f"HuggingFace Client Error: {e}")
             raise
+
 
 
 # Singleton — imported everywhere
