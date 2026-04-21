@@ -908,6 +908,29 @@ async def nearby_facilities(
     return {"facilities": facilities}
 
 
+@router.get("/api/departments/all")
+async def get_all_departments():
+    """Fetch all unique department names across all hospitals."""
+    hospitals = await supabase_rest.query_table("hospitals", {
+        "select": "departments(name)",
+        "is_active": "eq.true"
+    })
+    
+    if not hospitals:
+        return {"departments": []}
+    
+    unique_names = set()
+    for h in hospitals:
+        depts = h.get("departments", []) or [] # Ensure it is iterable
+        for d in depts:
+            name = d.get("name")
+            if name:
+                unique_names.add(name)
+                
+    return {"departments": sorted(list(unique_names))}
+
+
+
 async def _get_hospital_id(user_id: str):
     profile = await supabase_rest.get_profile(user_id)
     if profile:
