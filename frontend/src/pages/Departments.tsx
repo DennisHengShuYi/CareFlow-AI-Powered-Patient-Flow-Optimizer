@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '@clerk/clerk-react';
 import LayoutSidebar from '../components/LayoutSidebar';
-import { LayoutGrid, Pencil, Plus, Loader2, Hospital as HospitalIcon, Users, CheckCircle, XCircle } from 'lucide-react';
+import { LayoutGrid, Pencil, Plus, Loader2, Hospital as HospitalIcon, Users, CheckCircle, XCircle, Clock, BookOpen, Star } from 'lucide-react';
 import { capacityRoomStyle } from '../utils/capacityRoomStyle';
 
 const API = 'http://127.0.0.1:8002';
@@ -308,9 +308,10 @@ export default function Departments() {
                 <div key={dept.id} className="card" style={{ padding: '1.5rem' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.25rem' }}>
                     <h2 style={{ fontSize: '1.4rem', fontWeight: 800, margin: 0 }}>{dept.name}</h2>
-                    <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 600, display: 'flex', gap: '1rem' }}>
+                    <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 600, display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
                       <span>Rooms: {dept.metrics?.rooms_occupied}/{dept.metrics?.rooms_total}</span>
                       <span>Clinicians: {dept.metrics?.doctors_in_consult}/{dept.metrics?.doctors_total}</span>
+                      <span style={{ color: 'var(--primary)' }}>Avg Appt Usage: {dept.metrics?.total_appointment_usage || 0}m</span>
                     </div>
                   </div>
 
@@ -329,8 +330,22 @@ export default function Departments() {
                               </span>
                             </div>
 
-                            <div style={{ fontSize: '0.9rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: room.doctor_name ? 'var(--text-main)' : 'var(--text-muted)' }}>
+                            <div style={{ fontSize: '0.9rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: room.doctor_name ? 'var(--text-main)' : 'var(--text-muted)' }}>
                               <Users size={14} /> {room.doctor_name || 'Unstaffed'}
+                            </div>
+
+                            <div style={{ fontSize: '0.8rem', display: 'flex', gap: '0.75rem', marginBottom: '1rem', color: 'var(--text-muted)' }}>
+                              <span style={{ display: 'flex', alignItems: 'center', gap: '0.2rem' }} title="Total appointment minutes">
+                                <Clock size={12} /> {room.usage_minutes || 0}m usage
+                              </span>
+                              <span style={{ display: 'flex', alignItems: 'center', gap: '0.2rem' }} title="Scheduled future appointments">
+                                <BookOpen size={12} /> {room.appointment_count || 0} appts
+                              </span>
+                              {dept.rooms.length > 1 && room.usage_minutes === Math.min(...dept.rooms.map((r: any) => r.usage_minutes || 0)) && (
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '0.2rem', color: '#f57c00', fontWeight: 800 }}>
+                                  <Star size={12} fill="#f57c00" /> Next in rotation
+                                </span>
+                              )}
                             </div>
 
                             {room.in_consult?.length > 0 && (
