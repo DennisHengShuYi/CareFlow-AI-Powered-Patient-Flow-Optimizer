@@ -668,6 +668,11 @@ export default function Intake() {
                                     chief_complaint: triageData?.chief_complaint || '',
                                   },
                                   hospitalId: hosp.id,
+                                  selectedFacility: {
+                                    id: hosp.id,
+                                    name: hosp.name,
+                                    address: hosp.address,
+                                  },
                                 }}
                                 className="btn-primary"
                                 style={{ padding: '0.5rem 1rem', fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '0.35rem', background: isTop ? 'var(--primary)' : 'var(--neutral-300)', color: isTop ? 'white' : 'var(--text-main)', borderRadius: '9999px' }}
