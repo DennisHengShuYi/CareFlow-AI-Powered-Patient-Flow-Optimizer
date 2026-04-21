@@ -72,13 +72,25 @@ export default function Intake() {
     setIsFollowingUp(false);
     setInputMode('text');
     setRecommendations([]);
-    sessionStorage.removeItem('latestTriageContext');
+    setAttachedDocContent(null);
+    setAttachedDocName(null);
   };
+
+
+  const [loadingStatus, setLoadingStatus] = useState<string>('');
 
   const processTriageText = async (text: string) => {
     setLoading(true);
+    setLoadingStatus('Analyzing your symptoms...');
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute patience
+
     try {
       const token = await getToken();
+      
+      // Stage 1: Extraction
+      setLoadingStatus('Identifying clinical facts...');
       const res = await fetch('http://localhost:8002/intake/text', {
         method: 'POST',
         headers: {
@@ -88,18 +100,17 @@ export default function Intake() {
         body: JSON.stringify({ 
           text,
           session_id: sessionId 
-        })
+        }),
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
+
       if (!res.ok) {
-        let message = 'Failed to process text';
-        try {
-          const err = await res.json();
-          message = err?.detail || message;
-        } catch {
-          // Keep default fallback message when response is not JSON.
-        }
-        throw new Error(message);
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Failed to process triage');
       }
+
       const data = await res.json();
       
       setTriageData(data.triage);
@@ -121,14 +132,19 @@ export default function Intake() {
       setStep(2);
       setIsFollowingUp(false);
       setFollowUpResponse('');
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      const message = err instanceof Error ? err.message : 'Triage processing failed. Please check backend logs.';
-      alert(message);
+      if (err.name === 'AbortError') {
+        alert('Triage is taking longer than expected due to high clinical reasoning load. Please try again or proceed to the Emergency Department if this is an emergency.');
+      } else {
+        alert(`Triage processing failed: ${err.message || 'Connection Reset'}`);
+      }
     } finally {
       setLoading(false);
+      setLoadingStatus('');
     }
   };
+
 
   const handleTextSubmit = () => {
     if (!textInput.trim() && !attachedDocContent) return;
@@ -153,19 +169,25 @@ export default function Intake() {
           headers: { 'Authorization': `Bearer ${token}` },
           body: formData
       });
-      if (!docRes.ok) throw new Error('File upload failed');
+      
+      if (!docRes.ok) {
+        const errorData = await docRes.json().catch(() => ({ detail: 'Upload failed' }));
+        throw new Error(errorData.detail || 'File upload failed');
+      }
+      
       const docData = await docRes.json();
       
       setAttachedDocContent(docData.content || docData.extracted || "");
       setAttachedDocName(fileName);
       setInputMode('text');
       
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('Failed to upload or process document.');
+      alert(`Document Error: ${err.message}`);
     } finally {
       setLoading(false);
     }
+
   };
 
   const startListening = () => {
@@ -354,13 +376,14 @@ export default function Intake() {
                 />
                 <button
                   onClick={handleTextSubmit}
-                  disabled={loading || !textInput.trim()}
+                  disabled={loading || (!textInput.trim() && !attachedDocContent)}
                   className="btn-primary"
                   style={{ alignSelf: 'flex-end', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
                 >
                   {loading ? <Loader2 size={16} className="animate-spin" /> : <ArrowRight size={16} />}
-                  {loading ? 'Processing...' : 'Analyze Symptoms'}
+                  {loading ? ' ' + loadingStatus : 'Analyze Symptoms'}
                 </button>
+
               </div>
             )}
 
@@ -708,7 +731,7 @@ export default function Intake() {
                               style={{ fontSize: '0.875rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', flex: 2 }}
                             >
                               {loading ? <Loader2 size={14} className="animate-spin" /> : <ChevronRight size={14} />}
-                              Submit Response
+                              {loading ? ' ' + loadingStatus : 'Submit Response'}
                             </button>
                           </div>
                         </div>

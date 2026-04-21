@@ -22,9 +22,26 @@ class Settings(BaseSettings):
     # LLM Provider
     LLM_PROVIDER: Literal["gemini", "zhipu"] = "gemini"
     GEMINI_API_KEY: str = ""
+    OPENAI_API_KEY: str = ""
     ZHIPU_API_KEY: str = ""
-    MODEL_NAME: str = "gemini-2.5-flash-lite"
-    EMBEDDING_DIMENSIONS: int = 1536
+    MODEL_NAME: str = "models/gemini-3.1-flash-lite-preview"
+    
+    # Multi-Agent Models
+    AGENT_EXTRACTOR_MODEL: str = "models/gemini-3.1-flash-lite-preview"
+    AGENT_STRATEGIST_MODEL: str = "models/gemini-3.1-flash-lite-preview"
+    AGENT_STRATEGIST_PROVIDER: str = "gemini"
+
+    AGENT_CRITIC_MODEL: str = "llama-3.3-70b-versatile"
+    AGENT_CRITIC_PROVIDER: str = "groq"
+
+    
+    GROQ_API_KEY: str = ""
+    
+    # Embedding Configuration (Decoupled from LLM Provider)
+    EMBEDDING_PROVIDER: str = "huggingface"
+    EMBEDDING_MODEL: str = "BAAI/bge-m3"
+    EMBEDDING_DIMENSIONS: int = 1024
+    HUGGINGFACE_API_KEY: str = ""
 
     # Upstash Redis
     UPSTASH_REDIS_REST_URL: str

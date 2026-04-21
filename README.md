@@ -7,9 +7,9 @@ MediRoute is a full-stack AI-powered healthcare platform designed to optimize pa
 |---|---|---|
 | **Frontend** | React + TypeScript + Vite | 5173 |
 | **Backend** | Python + FastAPI | 8002 |
+| **Triage Engine** | Multi-Agent Orchestrator (Google + Groq) | - |
 | **Database** | Supabase (PostgreSQL) | Hosted |
 | **Cache / Session** | Upstash Redis (Serverless REST) | Hosted |
-| **AI Engine** | Google Gemini (`gemini-2.5-flash-lite`) | Hosted |
 | **Auth** | Clerk | Hosted |
 
 ---
@@ -19,7 +19,7 @@ MediRoute is a full-stack AI-powered healthcare platform designed to optimize pa
 ### Prerequisites
 Make sure you have the following installed:
 - **Node.js** v18 or higher
-- **Python** 3.9 or higher
+- **Python** 3.12.10
 - A `.env` file in the project root (see [Environment Variables](#environment-variables))
 
 ---
@@ -96,11 +96,27 @@ DATABASE_URL=postgresql+asyncpg://<user>:<password>@<host>:5432/postgres
 DATABASE_URL_DIRECT=postgresql+asyncpg://<user>:<password>@<host>:5432/postgres
 
 # ================================
-# LLM Provider
+# LLM Providers (Multi-Agent)
 # ================================
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=<your_gemini_api_key>
-MODEL_NAME=gemini-2.5-flash-lite
+GROQ_API_KEY=<your_groq_api_key>
+OPENAI_API_KEY=<your_openai_api_key>
+HUGGINGFACE_API_KEY=<your_hf_key>
+
+# Config-Driven Agent Models
+AGENT_EXTRACTOR_MODEL=models/gemini-1.5-flash-lite-001
+AGENT_STRATEGIST_MODEL=models/gemini-1.5-flash-lite-001
+AGENT_STRATEGIST_PROVIDER=gemini
+AGENT_CRITIC_MODEL=llama-3.3-70b-versatile
+AGENT_CRITIC_PROVIDER=groq
+
+# ================================
+# Embeddings & RAG
+# ================================
+EMBEDDING_PROVIDER=huggingface
+EMBEDDING_MODEL=BAAI/bge-m3
+EMBEDDING_DIMENSIONS=1024
 
 # ================================
 # Upstash Redis
@@ -115,16 +131,17 @@ RATE_LIMIT_WINDOW_SECONDS=60
 # Clerk Authentication
 # ================================
 CLERK_SECRET_KEY=sk_test_<your_clerk_secret_key>
-CLERK_JWKS_URL=          # Leave blank to use Clerk's default JWKS
+CLERK_JWKS_URL=
 
 # ================================
-# Supabase REST
+# Supabase Configuration
 # ================================
 USE_SUPABASE=true
-SUPABASE_URL=https://<project>.supabase.co
-SUPABASE_ANON_KEY=<your_supabase_anon_key>
-SUPABASE_SERVICE_ROLE_KEY=<your_supabase_service_role_key>
+VITE_SUPABASE_URL=https://<project>.supabase.co
+VITE_SUPABASE_ANON_KEY=<your_anon_key>
+SUPABASE_SERVICE_ROLE_KEY=<your_service_key>
 ```
+
 
 Additionally, create `frontend/.env` with:
 
@@ -139,15 +156,17 @@ VITE_SUPABASE_ANON_KEY=<your_supabase_anon_key>
 ## 🛠️ Troubleshooting
 
 ### Port Already in Use
-If you see an error saying port 8001/8002 is already in use, kill the ghost process:
+If you see an error saying port 8002 is already in use, kill the ghost process:
 ```powershell
 # Kill all stale uvicorn/python processes (Windows)
 taskkill /F /IM uvicorn.exe /T
 taskkill /F /IM python.exe /T
-
-# Then restart the backend
-$env:PYTHONPATH="."; .\venv\Scripts\python.exe -m uvicorn main:app --port 8002 --reload
 ```
+
+### Memory Allocation Errors (Windows)
+If you see `OpenBLAS error: Memory allocation failed` or `Paging file too small`:
+1. Set the thread limit: `$env:OPENBLAS_NUM_THREADS=1`
+2. The system now uses **Lazy Loading** for heavy models (Whisper/PDF) to minimize startup memory footprint.
 
 ### CORS Errors in Browser
 Ensure the backend is running on port **8002** (not 8001). The CORS allowlist in `backend/main.py` is configured for:
