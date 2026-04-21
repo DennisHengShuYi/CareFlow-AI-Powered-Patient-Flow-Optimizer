@@ -11,8 +11,17 @@ from typing import Optional, Literal
 from datetime import timezone
 
 from sqlalchemy import select, and_, text
+from sqlalchemy.exc import IntegrityError
 
-from app.models.db import AsyncSessionLocal, Appointment, Doctor, Hospital, Department, Profile
+from app.models.db import (
+    APPOINTMENT_STATUS_SCHEDULED,
+    AsyncSessionLocal,
+    Appointment,
+    Doctor,
+    Hospital,
+    Department,
+    Profile,
+)
 
 # ---------------------------------------------------------------------------
 # Urgency → max days ahead
@@ -515,26 +524,38 @@ class BookingEngine:
                 open_time, close_time, open_days = hospital_schedule_cache[schedule_key]
                 hospital_cutoff = self._hospital_cutoff(now, close_time, days_window)
 
+                booked_stmt = select(Appointment.scheduled_at).where(
+                    and_(
+                        Appointment.doctor_id == doc.id,
+                        Appointment.status == APPOINTMENT_STATUS_SCHEDULED,
+                        Appointment.scheduled_at >= now,
+                        Appointment.scheduled_at <= hospital_cutoff,
+                    )
+                )
+                booked_result = await session.execute(booked_stmt)
+                booked_times = {self._to_app_tz(row[0]).replace(second=0, microsecond=0) for row in booked_result}
+
                 if wait_minutes is not None:
                     # Temporary hardcoded primary-care wait-time mode.
                     candidate = now + timedelta(minutes=wait_minutes)
                     candidate = self._round_up_to_interval(candidate, 30)
                     candidate = self._advance_into_open_hours(candidate, open_time, close_time, open_days, 30)
                     while candidate <= hospital_cutoff and len(slots) < max_slots:
-                        est_wait = max(0, int((candidate - now).total_seconds() // 60))
-                        slots.append({
-                            "doctor_id": str(doc.id),
-                            "hospital_id": str(hosp.id),
-                            "clinic_name": hosp.name,
-                            "clinic_address": hosp.address or "Contact Hospital",
-                            "department_name": dept.name,
-                            "scheduled_at": candidate.isoformat(),
-                            "duration_minutes": 30,
-                            "urgency": urgency,
-                            "specialty_match": True,
-                            "service_mode": "wait_time",
-                            "estimated_wait_minutes": est_wait,
-                        })
+                        if candidate > now and candidate not in booked_times:
+                            est_wait = max(0, int((candidate - now).total_seconds() // 60))
+                            slots.append({
+                                "doctor_id": str(doc.id),
+                                "hospital_id": str(hosp.id),
+                                "clinic_name": hosp.name,
+                                "clinic_address": hosp.address or "Contact Hospital",
+                                "department_name": dept.name,
+                                "scheduled_at": candidate.isoformat(),
+                                "duration_minutes": 30,
+                                "urgency": urgency,
+                                "specialty_match": True,
+                                "service_mode": "wait_time",
+                                "estimated_wait_minutes": est_wait,
+                            })
                         candidate = candidate + timedelta(minutes=30)
                         candidate = self._advance_into_open_hours(candidate, open_time, close_time, open_days, 30)
                     if len(slots) >= max_slots:
@@ -549,20 +570,21 @@ class BookingEngine:
                     candidate = self._round_up_to_interval(candidate, 30)
                     candidate = self._advance_into_open_hours(candidate, open_time, close_time, open_days, 30)
                     while candidate <= hospital_cutoff and len(slots) < max_slots:
-                        est_wait = max(0, int((candidate - now).total_seconds() // 60))
-                        slots.append({
-                            "doctor_id": str(doc.id),
-                            "hospital_id": str(hosp.id),
-                            "clinic_name": hosp.name,
-                            "clinic_address": hosp.address or "Contact Hospital",
-                            "department_name": dept.name,
-                            "scheduled_at": candidate.isoformat(),
-                            "duration_minutes": 30,
-                            "urgency": urgency,
-                            "specialty_match": True,
-                            "service_mode": "priority",
-                            "estimated_wait_minutes": est_wait,
-                        })
+                        if candidate > now and candidate not in booked_times:
+                            est_wait = max(0, int((candidate - now).total_seconds() // 60))
+                            slots.append({
+                                "doctor_id": str(doc.id),
+                                "hospital_id": str(hosp.id),
+                                "clinic_name": hosp.name,
+                                "clinic_address": hosp.address or "Contact Hospital",
+                                "department_name": dept.name,
+                                "scheduled_at": candidate.isoformat(),
+                                "duration_minutes": 30,
+                                "urgency": urgency,
+                                "specialty_match": True,
+                                "service_mode": "priority",
+                                "estimated_wait_minutes": est_wait,
+                            })
                         candidate = candidate + timedelta(minutes=30)
                         candidate = self._advance_into_open_hours(candidate, open_time, close_time, open_days, 30)
                     if len(slots) >= max_slots:
@@ -572,18 +594,6 @@ class BookingEngine:
                 # Default templates since Doctor table is simpler
                 duration: int = 30
                 interval_minutes: int = 30
-
-                # Fetch existing booked appointment times for this doctor
-                booked_stmt = select(Appointment.scheduled_at).where(
-                    and_(
-                        Appointment.doctor_id == doc.id,
-                        Appointment.status == "booked",
-                        Appointment.scheduled_at >= now,
-                        Appointment.scheduled_at <= hospital_cutoff,
-                    )
-                )
-                booked_result = await session.execute(booked_stmt)
-                booked_times = {self._to_app_tz(row[0]).replace(second=0, microsecond=0) for row in booked_result}
 
                 # Iterate candidate slot times in 30-minute blocks inside the hospital operating window.
                 cursor = datetime.combine(now.date(), open_time, tzinfo=_APP_TZ)
@@ -618,6 +628,25 @@ class BookingEngine:
                 hosp_rows = await session.execute(hosp_stmt)
                 hospitals = hosp_rows.scalars().all()
 
+                queue_booked_stmt = select(Appointment.hospital_id, Appointment.scheduled_at).where(
+                    and_(
+                        Appointment.doctor_id.is_(None),
+                        Appointment.hospital_id.is_not(None),
+                        Appointment.status == APPOINTMENT_STATUS_SCHEDULED,
+                        Appointment.scheduled_at >= now,
+                        Appointment.scheduled_at <= datetime.combine(now.date() + timedelta(days=days_window), clock_time.max, tzinfo=_APP_TZ),
+                    )
+                )
+                queue_booked_result = await session.execute(queue_booked_stmt)
+                queue_booked_times = {
+                    (
+                        str(row[0]),
+                        self._to_app_tz(row[1]).replace(second=0, microsecond=0),
+                    )
+                    for row in queue_booked_result
+                    if row[0] is not None
+                }
+
                 for idx, hosp in enumerate(hospitals):
                     schedule_key = str(hosp.id)
                     if schedule_key not in hospital_schedule_cache:
@@ -630,6 +659,8 @@ class BookingEngine:
                         candidate = self._round_up_to_interval(candidate, 30)
                         candidate = self._advance_into_open_hours(candidate, open_time, close_time, open_days, 30)
                         if candidate > hospital_cutoff:
+                            continue
+                        if (str(hosp.id), candidate) in queue_booked_times:
                             continue
                         est = max(0, int((candidate - now).total_seconds() // 60))
                         slots.append({
@@ -653,6 +684,8 @@ class BookingEngine:
                         candidate = self._round_up_to_interval(candidate, 30)
                         candidate = self._advance_into_open_hours(candidate, open_time, close_time, open_days, 30)
                         if candidate > hospital_cutoff:
+                            continue
+                        if (str(hosp.id), candidate) in queue_booked_times:
                             continue
                         est = max(0, int((candidate - now).total_seconds() // 60))
                         slots.append({
@@ -741,6 +774,7 @@ class BookingEngine:
         session_id: str,
         patient_id: str | None,
         provider_id: str | None,
+        hospital_id: str | None,
         scheduled_at_iso: str,
         urgency: str,
         complaint: str,
@@ -760,6 +794,7 @@ class BookingEngine:
 
             provider_clean = (provider_id or "").strip()
             doctor_uuid: uuid.UUID | None = None
+            hospital_uuid: uuid.UUID | None = None
             if provider_clean:
                 doctor_lookup = await session.execute(
                     select(Doctor, Department)
@@ -781,8 +816,35 @@ class BookingEngine:
                         "Selected appointment slot does not match triage-recommended department/specialty."
                     )
                 doctor_uuid = doctor.id
+                hospital_uuid = doctor.hospital_id
             elif not recommended_specialist:
                 raise ValueError("Recommended specialty is required for department-queue booking.")
+            else:
+                if not hospital_id:
+                    raise ValueError("Hospital ID is required for department-queue booking.")
+                hospital_uuid = uuid.UUID(hospital_id)
+
+            if doctor_uuid is not None:
+                conflict_stmt = select(Appointment.id).where(
+                    and_(
+                        Appointment.doctor_id == doctor_uuid,
+                        Appointment.status == APPOINTMENT_STATUS_SCHEDULED,
+                        Appointment.scheduled_at == scheduled_at,
+                    )
+                ).limit(1)
+            else:
+                conflict_stmt = select(Appointment.id).where(
+                    and_(
+                        Appointment.doctor_id.is_(None),
+                        Appointment.hospital_id == hospital_uuid,
+                        Appointment.status == APPOINTMENT_STATUS_SCHEDULED,
+                        Appointment.scheduled_at == scheduled_at,
+                    )
+                ).limit(1)
+
+            conflict_res = await session.execute(conflict_stmt)
+            if conflict_res.first():
+                raise ValueError("Selected appointment slot is no longer available.")
 
             fhir = self._build_fhir_appointment(
                 str(appt_id), str(patient_uuid), provider_clean or None,
@@ -793,18 +855,23 @@ class BookingEngine:
                 id=appt_id,
                 session_id=session_uuid,
                 patient_id=patient_uuid,
+                hospital_id=hospital_uuid,
                 doctor_id=doctor_uuid,
                 scheduled_at=scheduled_at,
                 duration_minutes=duration_minutes,
                 appointment_type="consultation",
                 urgency_level=urgency,
-                status="booked",
+                status=APPOINTMENT_STATUS_SCHEDULED,
                 chief_complaint=complaint,
                 fhir_resource=fhir,
                 confirmation_sent_at=datetime.utcnow(),
             )
             session.add(appt)
-            await session.commit()
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                raise ValueError("Selected appointment slot is no longer available.")
 
         return fhir
 
