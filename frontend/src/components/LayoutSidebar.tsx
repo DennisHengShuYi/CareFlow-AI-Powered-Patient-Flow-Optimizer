@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, FileText, Building, Calendar, Map } from 'lucide-react';
+import { LayoutDashboard, Users, FileText, Building, Calendar, BookMarked, Map } from 'lucide-react';
 import { SignedIn, SignedOut, UserButton } from '@clerk/clerk-react';
 import { useProfile } from '../hooks/useProfile';
 import { ShieldCheck } from 'lucide-react';
@@ -15,7 +15,7 @@ export default function LayoutSidebar({ children }: { children: React.ReactNode 
     { name: 'Departments', path: '/departments', icon: Building, roles: ['hospital_staff'] },
     { name: 'Nearby Facilities', path: '/nearby-facilities', icon: Map, roles: ['patient'] },
     { name: 'Appointments', path: '/appointments', icon: Calendar, roles: ['patient'] },
-    { name: 'My Appointments', path: '/my-appointments', icon: Calendar, roles: ['patient'] },
+    { name: 'My Bookings', path: '/my-bookings', icon: BookMarked, roles: ['patient'] },
   ];
 
   // Filter links based on role
@@ -41,7 +41,7 @@ export default function LayoutSidebar({ children }: { children: React.ReactNode 
           <div style={{ width: '32px', height: '32px', minWidth: '32px', borderRadius: '50%', background: 'var(--primary)', color: 'white', display: 'flex', justifyContent: 'center', alignItems: 'center', fontWeight: 'bold' }}>+</div>
           <Link to="/" style={{ whiteSpace: 'nowrap' }} className="hide-on-mobile">
             <h2 style={{ fontSize: '1.25rem', color: 'var(--secondary)' }}>CareFlow</h2>
-            <div style={{ fontSize: '0.65rem', letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Healthcare<br/>Intelligence</div>
+            <div style={{ fontSize: '0.65rem', letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Healthcare<br />Intelligence</div>
           </Link>
         </div>
 

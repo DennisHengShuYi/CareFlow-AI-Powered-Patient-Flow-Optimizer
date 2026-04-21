@@ -12,6 +12,7 @@ type AppointmentItem = {
   status: string;
   chief_complaint: string;
   doctor_id: string | null;
+  room_label: string | null;
   people_before: number;
   live_wait_minutes: number;
 };
@@ -42,6 +43,12 @@ function ItemCard({ item, showMeta = true }: { item: AppointmentItem; showMeta?:
         <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--primary)' }}>Urgency {item.urgency}</div>
       </div>
       <div style={{ fontSize: '0.88rem' }}><strong>Complaint:</strong> {item.chief_complaint}</div>
+      {item.room_label && (
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', background: 'var(--neutral-200)', borderRadius: '8px', padding: '0.2rem 0.6rem', fontSize: '0.8rem', fontWeight: 600, color: 'var(--secondary)', width: 'fit-content' }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg>
+          Room: {item.room_label}
+        </div>
+      )}
       {showMeta && (
         <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}><Clock3 size={14} /> Wait {item.live_wait_minutes} min</div>
@@ -115,8 +122,8 @@ export default function MyAppointments() {
       <div className="responsive-padding" style={{ display: 'grid', gap: '1rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
           <div>
-            <h1 style={{ fontSize: 'var(--font-h1)', fontWeight: 800, marginBottom: '0.35rem' }}>My Appointments</h1>
-            <p style={{ color: 'var(--text-muted)' }}>See your current booking, history, live waiting time, and queue position.</p>
+            <h1 style={{ fontSize: 'var(--font-h1)', fontWeight: 800, marginBottom: '0.35rem' }}>My Bookings</h1>
+            <p style={{ color: 'var(--text-muted)' }}>See your current booking, assigned room, live waiting time, and queue position.</p>
           </div>
           <button className="btn-secondary" onClick={() => load()} disabled={loading}>
             {loading || refreshing ? 'Refreshing...' : 'Refresh'}

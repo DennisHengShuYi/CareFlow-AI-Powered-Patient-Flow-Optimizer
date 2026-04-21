@@ -611,9 +611,75 @@ async def book_appointment(
             patient_profile_id=user.get("sub"),
             duration_minutes=body.duration_minutes,
         )
+
+        # ── Room assignment ──────────────────────────────────────────────────
+        # Convert scheduled_at to MYT (UTC+8) and check working hours 08:00-17:00
+        room_label: str | None = None
+        try:
+            from datetime import timedelta
+            MYT_OFFSET = timedelta(hours=8)
+            scheduled_utc = datetime.fromisoformat(body.scheduled_at.replace("Z", "+00:00"))
+            if scheduled_utc.tzinfo is None:
+                scheduled_utc = scheduled_utc.replace(tzinfo=timezone.utc)
+            scheduled_myt = scheduled_utc.astimezone(timezone(MYT_OFFSET))
+            hour_myt = scheduled_myt.hour
+            is_working_hours = 8 <= hour_myt < 17
+
+            if is_working_hours and body.provider_id:
+                async with AsyncSessionLocal() as db:
+                    # Look up the doctor's department
+                    doctor_res = await db.execute(
+                        select(Doctor).where(Doctor.id == uuid.UUID(body.provider_id))
+                    )
+                    doctor = doctor_res.scalar_one_or_none()
+
+                    if doctor and doctor.department_id:
+                        # Find appointment id just created (latest for this patient/session)
+                        appt_res = await db.execute(
+                            text(
+                                "SELECT id FROM appointments "
+                                "WHERE session_id = :sid "
+                                "ORDER BY created_at DESC LIMIT 1"
+                            ),
+                            {"sid": body.session_id},
+                        )
+                        appt_row = appt_res.first()
+
+                        # Get room with lowest usage in the department
+                        room_res = await db.execute(
+                            select(Room)
+                            .where(Room.department_id == doctor.department_id)
+                            .order_by(Room.usage_minutes.asc())
+                            .limit(1)
+                        )
+                        room = room_res.scalar_one_or_none()
+
+                        if room and appt_row:
+                            appt_id = appt_row[0]
+                            # Assign room and increment usage
+                            await db.execute(
+                                text(
+                                    "UPDATE appointments SET room_id = :rid WHERE id = :aid"
+                                ),
+                                {"rid": str(room.id), "aid": str(appt_id)},
+                            )
+                            new_usage = (room.usage_minutes or 0) + (body.duration_minutes or 30)
+                            await db.execute(
+                                text(
+                                    "UPDATE rooms SET usage_minutes = :um WHERE id = :rid"
+                                ),
+                                {"um": new_usage, "rid": str(room.id)},
+                            )
+                            await db.commit()
+                            room_label = room.label
+                            print(f"DEBUG: Assigned room '{room_label}' to appointment {appt_id}")
+        except Exception as room_err:
+            print(f"DEBUG: Room assignment failed (non-fatal): {room_err}")
+        # ────────────────────────────────────────────────────────────────────
+
         latency = int((time.time() - t0) * 1000)
         await _audit(body.session_id, "/appointments/book", body.complaint, latency, 200)
-        return {"status": "confirmed", "fhir_resource": fhir}
+        return {"status": "confirmed", "fhir_resource": fhir, "room_label": room_label}
     except ValueError as exc:
         latency = int((time.time() - t0) * 1000)
         await _audit(body.session_id, "/appointments/book", body.complaint, latency, 409, str(exc))
@@ -622,6 +688,7 @@ async def book_appointment(
         latency = int((time.time() - t0) * 1000)
         await _audit(body.session_id, "/appointments/book", body.complaint, latency, 500, str(exc))
         raise HTTPException(status_code=500, detail=str(exc))
+
 
 
 @router.get("/appointments/my")
@@ -675,6 +742,16 @@ async def my_appointments(user: dict = Depends(verify_clerk_token)):
             wait_from_time = max(0, int((appt.scheduled_at - now).total_seconds() // 60))
             live_wait_minutes = wait_from_time + (people_before * int(appt.duration_minutes or 30))
 
+            # Fetch room label if assigned
+            room_label: str | None = None
+            if appt.room_id:
+                room_res = await db.execute(
+                    select(Room).where(Room.id == appt.room_id)
+                )
+                room = room_res.scalar_one_or_none()
+                if room:
+                    room_label = room.label
+
             return {
                 "id": str(appt.id),
                 "session_id": str(appt.session_id),
@@ -684,6 +761,7 @@ async def my_appointments(user: dict = Depends(verify_clerk_token)):
                 "status": appt.status,
                 "chief_complaint": appt.chief_complaint,
                 "doctor_id": str(appt.doctor_id) if appt.doctor_id else None,
+                "room_label": room_label,
                 "people_before": people_before,
                 "live_wait_minutes": live_wait_minutes,
             }

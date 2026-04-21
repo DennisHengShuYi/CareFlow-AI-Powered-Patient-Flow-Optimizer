@@ -473,10 +473,10 @@ export default function Appointments() {
                 className="btn-primary"
                 onClick={() => {
                   setConfirmation(null);
-                  navigate('/my-appointments');
+                  navigate('/my-bookings');
                 }}
               >
-                View My Appointments
+                View My Bookings
               </button>
             </div>
           </div>
