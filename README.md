@@ -26,24 +26,38 @@ Make sure you have the following installed:
 
 ### Step 1 — Backend (FastAPI)
 
-Open a terminal and run:
+Open a terminal and select the instructions for your operating system:
 
+**🪟 Windows (PowerShell):**
 ```powershell
 # Navigate to the backend directory
 cd backend
 
-# Create a virtual environment (first time only)
+# Create and activate a virtual environment
 python -m venv venv
+.\venv\Scripts\Activate.ps1
 
-# Activate virtual environment
-.\venv\Scripts\Activate.ps1       # Windows PowerShell
-# source venv/bin/activate        # macOS / Linux
-
-# Install Python dependencies (first time only)
+# Install all necessary Python dependencies from the backend directory
 pip install -r requirements.txt
 
-# Start the backend server on port 8002
-$env:PYTHONPATH="."; .\venv\Scripts\python.exe -m uvicorn main:app --port 8002 --reload
+# Start the backend server
+$env:PYTHONPATH="."; uvicorn main:app --port 8002 --reload
+```
+
+**🍎 macOS / 🐧 Linux (Bash/Zsh):**
+```bash
+# Navigate to the backend directory
+cd backend
+
+# Create and activate a virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install all necessary Python dependencies from the backend directory
+pip install -r requirements.txt
+
+# Start the backend server
+PYTHONPATH="." uvicorn main:app --port 8002 --reload
 ```
 
 > ✅ Backend is live at: **http://localhost:8002**  
