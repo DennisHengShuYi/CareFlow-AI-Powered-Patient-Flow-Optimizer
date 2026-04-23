@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@clerk/clerk-react';
-import { Calendar, Loader2, CheckCircle2, AlertTriangle, MapPin } from 'lucide-react';
+import { Calendar, Loader2, CheckCircle2, AlertTriangle, MapPin, ChevronDown } from 'lucide-react';
 import LayoutSidebar from '../components/LayoutSidebar';
 
 type TriageContext = {
@@ -90,6 +90,7 @@ export default function Appointments() {
   const [ctx, setCtx] = useState<TriageContext | null>(locationState.triageContext || null);
   const [hospitalId, setHospitalId] = useState<string | null>(locationState.hospitalId || null);
   const [selectedFacility, setSelectedFacility] = useState<LocationState['selectedFacility'] | null>(locationState.selectedFacility || null);
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [slots, setSlots] = useState<Slot[]>([]);
   const [loadingSlots, setLoadingSlots] = useState(false);
   const [bookingSlotId, setBookingSlotId] = useState<string | null>(null);
@@ -101,6 +102,7 @@ export default function Appointments() {
   const [nearbyFacilities, setNearbyFacilities] = useState<NearbyFacility[]>([]);
   const [preferredWindow, setPreferredWindow] = useState<PreferredWindow>('any');
   const [confirmingSlot, setConfirmingSlot] = useState<Slot | null>(null);
+  const [activeTimeSlot, setActiveTimeSlot] = useState<string | null>(null);
 
   const canQuery = useMemo(() => {
     return Boolean(ctx?.recommended_specialist && ctx?.urgency);
@@ -108,7 +110,7 @@ export default function Appointments() {
 
   const groupedSlots = useMemo(() => {
     // 1. Group by Facility (Hospital/Clinic)
-    const byFacility = new Map<string, { name: string; address: string; dates: Map<string, Slot[]> }>();
+    const byFacility = new Map<string, { name: string; address: string; dates: Map<string, Map<string, Slot[]>> }>();
 
     slots.forEach((slot) => {
       const facilityId = slot.hospital_id;
@@ -116,16 +118,23 @@ export default function Appointments() {
         byFacility.set(facilityId, {
           name: slot.clinic_name,
           address: slot.clinic_address,
-          dates: new Map<string, Slot[]>(),
+          dates: new Map<string, Map<string, Slot[]>>(),
         });
       }
 
       const d = new Date(slot.scheduled_at);
       const dateKey = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+      const timeKey = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+      
       const facility = byFacility.get(facilityId)!;
-      const dateList = facility.dates.get(dateKey) || [];
-      dateList.push(slot);
-      facility.dates.set(dateKey, dateList);
+      if (!facility.dates.has(dateKey)) {
+        facility.dates.set(dateKey, new Map<string, Slot[]>());
+      }
+      
+      const dateMap = facility.dates.get(dateKey)!;
+      const timeList = dateMap.get(timeKey) || [];
+      timeList.push(slot);
+      dateMap.set(timeKey, timeList);
     });
 
     // 2. Convert to sorted array for rendering
@@ -133,17 +142,32 @@ export default function Appointments() {
       ...facility,
       sortedDates: Array.from(facility.dates.entries())
         .sort(([a], [b]) => a.localeCompare(b))
-        .map(([key, daySlots]) => {
-          const date = new Date(daySlots[0].scheduled_at);
+        .map(([dateKey, timeMap]) => {
+          const firstSlotAtTime = Array.from(timeMap.values())[0][0];
+          const date = new Date(firstSlotAtTime.scheduled_at);
           const label = date.toLocaleDateString([], {
             weekday: 'short',
             day: '2-digit',
             month: 'short',
           });
+
+          const sortedTimes = Array.from(timeMap.entries())
+            .sort(([a], [b]) => {
+               // Parse back to compare time correctly
+               const timeA = new Date(`1970/01/01 ${a}`).getTime();
+               const timeB = new Date(`1970/01/01 ${b}`).getTime();
+               return timeA - timeB;
+            })
+            .map(([timeLabel, timeSlots]) => ({
+              timeLabel,
+              slots: timeSlots,
+              period: new Date(timeSlots[0].scheduled_at).getHours() < 12 ? 'morning' : 'afternoon'
+            }));
+
           return {
-            key,
+            key: dateKey,
             label,
-            slots: daySlots.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime()),
+            times: sortedTimes,
           };
         }),
     }));
@@ -206,8 +230,9 @@ export default function Appointments() {
       const params = new URLSearchParams({
         specialty: ctx.recommended_specialist,
         urgency: ctx.urgency,
-        limit: '12',
+        limit: '300',
         preferred_window: preferredWindow,
+        target_date: selectedDate.toISOString(),
       });
       if (hospitalId) {
         params.set('hospital_id', hospitalId);
@@ -252,7 +277,7 @@ export default function Appointments() {
       fetchSlots();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canQuery, hospitalId, preferredWindow]);
+  }, [canQuery, hospitalId, preferredWindow, selectedDate]);
 
   const bookSlot = async (slot: Slot) => {
     if (!ctx) {
@@ -404,6 +429,40 @@ export default function Appointments() {
             </div>
           )}
 
+          <div style={{ display: 'flex', gap: '0.65rem', overflowX: 'auto', paddingBottom: '0.5rem', scrollbarWidth: 'none' }}>
+            {Array.from({ length: 7 }).map((_, i) => {
+              const d = new Date();
+              d.setDate(d.getDate() + i);
+              const isActive = d.toDateString() === selectedDate.toDateString();
+              return (
+                <button
+                  key={i}
+                  onClick={() => setSelectedDate(d)}
+                  className={isActive ? 'btn-primary' : 'btn-secondary'}
+                  style={{
+                    minWidth: '80px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    padding: '0.6rem 0.8rem',
+                    borderRadius: '12px',
+                    gap: '0.1rem'
+                  }}
+                >
+                  <span style={{ fontSize: '0.7rem', opacity: 0.8, textTransform: 'uppercase', fontWeight: 700 }}>
+                    {d.toLocaleDateString([], { weekday: 'short' })}
+                  </span>
+                  <span style={{ fontSize: '1.1rem', fontWeight: 800 }}>
+                    {d.getDate()}
+                  </span>
+                  <span style={{ fontSize: '0.65rem', opacity: 0.8 }}>
+                    {d.toLocaleDateString([], { month: 'short' })}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
             <div style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <Calendar size={18} color="var(--primary)" /> Available Slots
@@ -456,48 +515,97 @@ export default function Appointments() {
                   <div style={{ display: 'grid', gap: '1rem' }}>
                     {facility.sortedDates.map((dateGroup) => (
                       <div key={dateGroup.key}>
-                        <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.02rem' }}>
-                          {dateGroup.label}
+                        <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.02rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <Calendar size={14} /> {dateGroup.label}
                         </div>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem' }}>
-                          {dateGroup.slots.map((slot) => {
-                            const slotId = `${slot.doctor_id || 'queue'}|${slot.hospital_id}|${slot.scheduled_at}`;
-                            const booking = bookingSlotId === slotId;
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: '0.75rem' }}>
+                          {dateGroup.times.map((timeBlock) => {
+                            const timeId = `${facility.name}-${dateGroup.key}-${timeBlock.timeLabel}`;
+                            const isExpanded = activeTimeSlot === timeId;
+                            const hasMultiple = timeBlock.slots.length > 1;
+                            const firstSlot = timeBlock.slots[0];
                             
                             return (
-                              <button
-                                key={slotId}
-                                className={`slot-chip ${booking ? 'loading' : ''}`}
-                                onClick={() => setConfirmingSlot(slot)}
-                                disabled={booking || !ctx}
-                                style={{
-                                  display: 'flex',
-                                  flexDirection: 'column',
-                                  alignItems: 'center',
-                                  gap: '0.2rem',
-                                  padding: '0.6rem 0.8rem',
-                                  minWidth: '90px',
-                                  background: 'white',
-                                  border: '1.5px solid var(--neutral-400)',
-                                  borderRadius: '12px',
-                                  transition: 'all 0.2s',
-                                  cursor: 'pointer',
-                                  textAlign: 'center'
-                                }}
-                              >
-                                  <div style={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--primary)' }}>
-                                    {formatSlotTime(slot.scheduled_at).split(',').pop()?.trim()}
+                              <div key={timeId} style={{ position: 'relative' }}>
+                                <button
+                                  className="slot-chip"
+                                  onClick={() => {
+                                    if (hasMultiple) {
+                                      setActiveTimeSlot(isExpanded ? null : timeId);
+                                    } else {
+                                      setConfirmingSlot(firstSlot);
+                                    }
+                                  }}
+                                  style={{
+                                    width: '100%',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    alignItems: 'center',
+                                    padding: '0.75rem 0.5rem',
+                                    background: isExpanded ? 'var(--primary-light)' : 'white',
+                                    border: `1.5px solid ${isExpanded ? 'var(--primary)' : 'var(--neutral-400)'}`,
+                                    borderRadius: '14px',
+                                    transition: 'all 0.2s',
+                                    cursor: 'pointer',
+                                    boxShadow: isExpanded ? '0 4px 12px rgba(var(--primary-rgb), 0.15)' : 'none'
+                                  }}
+                                >
+                                  <div style={{ fontSize: '1rem', fontWeight: 800, color: isExpanded ? 'var(--primary)' : 'var(--text-main)' }}>
+                                    {timeBlock.timeLabel}
                                   </div>
-                                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600 }}>
-                                    {slot.duration_minutes}m • {slot.estimated_wait_minutes ?? 0}m wait
-                                  </div>
-                                  {slot.room_label && (
-                                    <div style={{ fontSize: '0.7rem', color: 'var(--secondary)', fontWeight: 700, marginTop: '0.1rem' }}>
-                                      {slot.room_label}
+                                  {hasMultiple ? (
+                                    <div style={{ fontSize: '0.65rem', color: 'var(--primary)', fontWeight: 700, marginTop: '0.2rem', display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
+                                      {timeBlock.slots.length} Rooms <ChevronDown size={10} />
+                                    </div>
+                                  ) : (
+                                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 600, marginTop: '0.2rem' }}>
+                                      {firstSlot.room_label}
                                     </div>
                                   )}
-                                  {booking && <div style={{ fontSize: '0.65rem', color: 'var(--primary)', fontWeight: 700 }}>Booking...</div>}
                                 </button>
+
+                                {isExpanded && (
+                                  <div 
+                                    className="shadow-xl"
+                                    style={{
+                                      position: 'absolute',
+                                      top: 'calc(100% + 8px)',
+                                      left: 0,
+                                      right: 0,
+                                      minWidth: '160px',
+                                      background: 'white',
+                                      border: '1px solid var(--neutral-400)',
+                                      borderRadius: '12px',
+                                      zIndex: 50,
+                                      padding: '0.5rem',
+                                      animation: 'fadeInUp 0.2s ease-out'
+                                    }}
+                                  >
+                                    <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.4rem', padding: '0 0.4rem' }}>SELECT ROOM</div>
+                                    <div style={{ display: 'grid', gap: '0.35rem' }}>
+                                      {timeBlock.slots.map((s, idx) => (
+                                        <button
+                                          key={idx}
+                                          onClick={() => {
+                                            setConfirmingSlot(s);
+                                            setActiveTimeSlot(null);
+                                          }}
+                                          className="btn-ghost"
+                                          style={{
+                                            justifyContent: 'space-between',
+                                            padding: '0.5rem 0.75rem',
+                                            borderRadius: '8px',
+                                            fontSize: '0.85rem'
+                                          }}
+                                        >
+                                          <span style={{ fontWeight: 700 }}>{s.room_label}</span>
+                                          <span style={{ fontSize: '0.7rem', opacity: 0.7 }}>{s.estimated_wait_minutes ?? 0}m wait</span>
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
                             );
                           })}
                         </div>

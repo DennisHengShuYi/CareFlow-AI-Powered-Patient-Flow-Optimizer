@@ -538,12 +538,20 @@ async def appointment_slots(
     limit: int = 12,
     preferred_window: str = "any",
     auto_expand: bool = True,
+    target_date: str | None = None,
     user: dict = Depends(verify_clerk_token),
 ):
-    slot_limit = max(3, min(limit, 24))
+    slot_limit = max(3, min(limit, 100))
     normalized_window = preferred_window.strip().lower()
     if normalized_window not in {"any", "morning", "afternoon"}:
         normalized_window = "any"
+
+    parsed_date: datetime | None = None
+    if target_date:
+        try:
+            parsed_date = datetime.fromisoformat(target_date.replace('Z', '+00:00'))
+        except ValueError:
+            pass
 
     slots = await booking_engine.get_available_slots(
         specialty,
@@ -551,27 +559,34 @@ async def appointment_slots(
         hospital_id,
         limit=slot_limit,
         preferred_window=normalized_window,
+        target_date=parsed_date,
     )
 
     expanded_from_hospital_filter = False
-    if hospital_id and auto_expand and len(slots) < slot_limit:
+    if hospital_id and auto_expand:
+        # If the primary hospital is busy or has few slots, always try to bring in variety
+        # regardless of whether we hit the initial 'limit'
         extra_slots = await booking_engine.get_available_slots(
             specialty,
             urgency,
             None,
-            limit=slot_limit * 2,
+            limit=24, # Fetch a larger pool for variety
             preferred_window=normalized_window,
+            target_date=parsed_date,
         )
         seen = {(s.get("doctor_id"), s.get("hospital_id"), s.get("scheduled_at")) for s in slots}
+        added_count = 0
         for slot in extra_slots:
             key = (slot.get("doctor_id"), slot.get("hospital_id"), slot.get("scheduled_at"))
             if key in seen:
                 continue
             slots.append(slot)
             seen.add(key)
-            if len(slots) >= slot_limit:
+            added_count += 1
+            # Allow up to 20 slots total when showing multiple hospitals
+            if len(slots) >= 20:
                 break
-        expanded_from_hospital_filter = len(slots) > 0
+        expanded_from_hospital_filter = added_count > 0
     wait_values = [slot.get("estimated_wait_minutes") for slot in slots if slot.get("estimated_wait_minutes") is not None]
     queue_too_long = not slots or (bool(wait_values) and min(wait_values) >= QUEUE_DIVERSION_THRESHOLD_MINUTES)
 
@@ -963,13 +978,7 @@ async def recommend_hospitals(
 
     # Prefer nearby hospitals first when location is known.
     NEARBY_RADIUS_KM = 120
-    if user_lat is not None and user_lng is not None:
-        nearby = [c for c in candidates if c["distance_km"] is not None and c["distance_km"] <= NEARBY_RADIUS_KM]
-        if nearby:
-            nearby.sort(key=lambda x: x["distance_km"])
-            return {"recommendations": nearby[:5]}
-
-    # Fallback to global distance sorting if no nearby matches are available.
+    # Return all candidates sorted by distance (nearby first)
     candidates.sort(key=lambda x: (x["distance_km"] if x["distance_km"] is not None else 999999))
     return {"recommendations": candidates[:5]}
 
