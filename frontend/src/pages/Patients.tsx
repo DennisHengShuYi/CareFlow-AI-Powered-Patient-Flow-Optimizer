@@ -32,7 +32,6 @@ interface Patient {
   insurers: string[];
   cases: Case[];
   type: 'inpatient' | 'outpatient' | 'emergency';
-  cases: Case[];
 }
 
 const HOSPITAL_DEPARTMENTS = [
@@ -484,8 +483,8 @@ export default function Patients() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <h3 style={{ fontSize: '1.25rem', fontWeight: 800 }}>Medical Cases</h3>
-                    <button 
-                      className="btn-primary" 
+                    <button
+                      className="btn-primary"
                       onClick={() => setIsNewCaseModalOpen(true)}
                       style={{
                         padding: '0.5rem 1rem', fontSize: '0.875rem',
@@ -571,7 +570,7 @@ export default function Patients() {
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
               <h3 style={{ fontSize: '1.5rem', fontWeight: 800 }}>Add New Case</h3>
-              <button 
+              <button
                 onClick={() => setIsNewCaseModalOpen(false)}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
               >
@@ -619,8 +618,8 @@ export default function Patients() {
               </div>
 
               {error && (
-                <div style={{ 
-                  padding: '0.75rem', borderRadius: '8px', backgroundColor: '#FEE2E2', 
+                <div style={{
+                  padding: '0.75rem', borderRadius: '8px', backgroundColor: '#FEE2E2',
                   color: '#B91C1C', fontSize: '0.875rem', marginBottom: '1.5rem',
                   fontWeight: 600
                 }}>
