@@ -230,6 +230,11 @@ class AssignRoomBody(BaseModel):
     doctor_id: str | None = None
 
 
+class NewCaseRequest(BaseModel):
+    title: str
+    department: str
+
+
 def _calculate_haversine(lat1, lon1, lat2, lon2):
     R = 6371.0
     dlat = math.radians(lat2 - lat1)
@@ -1157,6 +1162,38 @@ async def get_active_patients():
 #  GET /api/patients/{patient_id}/cases
 #  Single patient detail with cases
 # ─────────────────────────────────────────────
+@router.post("/api/patients/{patient_id}/cases")
+async def create_patient_case(patient_id: str, body: NewCaseRequest):
+    try:
+        print(f"[CASE_CREATE] Creating case for patient {patient_id}")
+        
+        new_case = {
+            "patient_id": patient_id,
+            "title": body.title,
+            "department": body.department,
+            "status": "active",
+            "workflow_status": "none",
+            "has_medical_bill": False,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        response = await supabase_rest.insert_table("medical_cases", new_case)
+        
+        if not response:
+            raise HTTPException(status_code=500, detail="Failed to create case in Supabase")
+            
+        return {
+            "success": True,
+            "data": response[0] if isinstance(response, list) else response
+        }
+        
+    except Exception as e:
+        print(f"[CASE_CREATE] ERROR: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────
+#  GET /api/patients/{patient_id}/cases
 @router.get("/api/patients/{patient_id}/cases")
 async def get_patient_detail_with_cases(patient_id: str):
     try:

@@ -9,7 +9,9 @@ import {
   Activity,
   FileCheck,
   Plus,
-  ArrowRight
+  ArrowRight,
+  X,
+  Loader2
 } from 'lucide-react';
 
 interface Case {
@@ -30,7 +32,35 @@ interface Patient {
   insurers: string[];
   cases: Case[];
   type: 'inpatient' | 'outpatient' | 'emergency';
+  cases: Case[];
 }
+
+const HOSPITAL_DEPARTMENTS = [
+  'Emergency Department',
+  'General Medicine',
+  'Pediatrics',
+  'Obstetrics & Gynecology',
+  'General Surgery',
+  'Cardiology',
+  'Orthopedics',
+  'Oncology',
+  'Neurology',
+  'Psychiatry',
+  'Dermatology',
+  'Gastroenterology',
+  'Urology',
+  'Radiology',
+  'Pathology / Laboratory',
+  'Pharmacy',
+  'Rehabilitation / Physiotherapy',
+  'Intensive Care Unit (ICU)',
+  'Neonatal ICU (NICU)',
+  'Operating Theater',
+  'General Practice (GP)',
+  'Dental Clinic',
+  'Ophthalmology',
+  'ENT (Ear, Nose & Throat)',
+];
 
 const API = 'http://127.0.0.1:8002';
 
@@ -94,18 +124,74 @@ export default function Patients() {
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
+  // New Case Modal State
+  const [isNewCaseModalOpen, setIsNewCaseModalOpen] = useState(false);
+  const [newCaseTitle, setNewCaseTitle] = useState('');
+  const [newCaseDepartment, setNewCaseDepartment] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refreshPatients = () => {
+    setLoading(true);
+    fetchPatients()
+      .then(data => {
+        setPatients(data);
+      })
+      .catch(err => console.error('[Patients] Refresh error:', err))
+      .finally(() => setLoading(false));
+  };
+
+  const handleCreateCase = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedPatientId || !newCaseTitle || !newCaseDepartment) return;
+
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      const token = localStorage.getItem('token');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const response = await fetch(`${API}/api/patients/${selectedPatientId}/cases`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          title: newCaseTitle,
+          department: newCaseDepartment
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to create case');
+      }
+
+      // Success
+      setIsNewCaseModalOpen(false);
+      setNewCaseTitle('');
+      setNewCaseDepartment('');
+      refreshPatients();
+    } catch (err: any) {
+      setError(err.message || 'An error occurred');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   // ✅ Single useEffect — no duplicate fetch
   useEffect(() => {
     setLoading(true);
     fetchPatients()
       .then(data => {
         setPatients(data);
-        // Auto-select first patient on load
-        if (data.length > 0) setSelectedPatientId(data[0].id);
+        // Auto-select first patient on load if none selected
+        if (data.length > 0 && !selectedPatientId) setSelectedPatientId(data[0].id);
       })
       .catch(err => console.error('[Patients] Load error:', err))
       .finally(() => setLoading(false));
-  }, []);
+  }, [selectedPatientId]);
 
   const selectedPatient = patients.find(p => p.id === selectedPatientId) ?? null;
 
@@ -398,10 +484,14 @@ export default function Patients() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <h3 style={{ fontSize: '1.25rem', fontWeight: 800 }}>Medical Cases</h3>
-                    <button className="btn-primary" style={{
-                      padding: '0.5rem 1rem', fontSize: '0.875rem',
-                      display: 'flex', alignItems: 'center', gap: '0.5rem'
-                    }}>
+                    <button 
+                      className="btn-primary" 
+                      onClick={() => setIsNewCaseModalOpen(true)}
+                      style={{
+                        padding: '0.5rem 1rem', fontSize: '0.875rem',
+                        display: 'flex', alignItems: 'center', gap: '0.5rem'
+                      }}
+                    >
                       <Plus size={16} /> New Case
                     </button>
                   </div>
@@ -466,6 +556,107 @@ export default function Patients() {
           )}
         </div>
       </div>
+
+      {/* New Case Modal */}
+      {isNewCaseModalOpen && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex',
+          alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+          backdropFilter: 'blur(4px)'
+        }}>
+          <div className="card" style={{
+            width: '100%', maxWidth: '500px', padding: '2rem',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h3 style={{ fontSize: '1.5rem', fontWeight: 800 }}>Add New Case</h3>
+              <button 
+                onClick={() => setIsNewCaseModalOpen(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
+              >
+                <X size={24} />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateCase}>
+              <div style={{ marginBottom: '1.5rem' }}>
+                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, marginBottom: '0.5rem', color: 'var(--text-muted)' }}>
+                  CASE TITLE
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Chronic Kidney Disease Follow-up"
+                  value={newCaseTitle}
+                  onChange={e => setNewCaseTitle(e.target.value)}
+                  style={{
+                    width: '100%', padding: '0.75rem', borderRadius: '10px',
+                    border: '1px solid var(--neutral-400)', outline: 'none'
+                  }}
+                />
+              </div>
+
+              <div style={{ marginBottom: '2rem' }}>
+                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, marginBottom: '0.5rem', color: 'var(--text-muted)' }}>
+                  DEPARTMENT
+                </label>
+                <select
+                  required
+                  value={newCaseDepartment}
+                  onChange={e => setNewCaseDepartment(e.target.value)}
+                  style={{
+                    width: '100%', padding: '0.75rem', borderRadius: '10px',
+                    border: '1px solid var(--neutral-400)', outline: 'none',
+                    backgroundColor: 'white'
+                  }}
+                >
+                  <option value="">Select a department</option>
+                  {HOSPITAL_DEPARTMENTS.map(dept => (
+                    <option key={dept} value={dept}>{dept}</option>
+                  ))}
+                </select>
+              </div>
+
+              {error && (
+                <div style={{ 
+                  padding: '0.75rem', borderRadius: '8px', backgroundColor: '#FEE2E2', 
+                  color: '#B91C1C', fontSize: '0.875rem', marginBottom: '1.5rem',
+                  fontWeight: 600
+                }}>
+                  {error}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <button
+                  type="button"
+                  onClick={() => setIsNewCaseModalOpen(false)}
+                  style={{
+                    flex: 1, padding: '0.75rem', borderRadius: '10px',
+                    border: '1px solid var(--neutral-400)', backgroundColor: 'white',
+                    fontWeight: 700, cursor: 'pointer'
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  style={{
+                    flex: 1, padding: '0.75rem', borderRadius: '10px',
+                    border: 'none', backgroundColor: 'var(--primary)',
+                    color: 'white', fontWeight: 700, cursor: isSubmitting ? 'not-allowed' : 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem'
+                  }}
+                >
+                  {isSubmitting ? <Loader2 size={18} className="animate-spin" /> : 'Create Case'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </LayoutSidebar>
   );
 }
