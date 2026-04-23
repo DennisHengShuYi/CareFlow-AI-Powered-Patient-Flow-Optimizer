@@ -64,4 +64,35 @@ class SupabaseRESTClient:
         """Fetch rooms for a department."""
         return await self.query_table("rooms", {"department_id": f"eq.{department_id}", "select": "*"})
 
+    async def update_table(self, table: str, data: dict, filters: dict = None, method: str = "PATCH"):
+        if not self.url or not self.key:
+            return None
+
+        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+            endpoint = f"{self.url}/rest/v1/{table}"
+
+            response = await client.request(
+                method,
+                endpoint,
+                headers=self.headers,
+                params=filters,
+                json=data
+            )
+
+        if response.status_code not in [200, 201]:
+            print(f"DEBUG Supabase error {response.status_code}: {response.text}")
+            return None
+
+        return response.json()
+
+    async def upsert_table(self, table: str, data: dict, filters: dict = None):
+        if filters:
+            # try update first
+            res = await self.update_table(table, data, filters, method="PATCH")
+            if res:
+                return res
+
+        # fallback insert
+        return await self.update_table(table, data, None, method="POST")
+
 supabase_rest = SupabaseRESTClient()

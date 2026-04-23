@@ -1131,7 +1131,7 @@ async def get_active_patients():
                         "workflow_status": c.get("workflow_status"),
                         "created_at": c.get("created_at")
                     } 
-                    for c in p.get("medical_cases", [])
+                    for c in (p.get("medical_cases") or [])
                 ]
             }
             
@@ -1151,6 +1151,8 @@ async def get_active_patients():
 
     except Exception as e:
         print(f"[API ERROR] {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
  
 # ─────────────────────────────────────────────
@@ -1200,95 +1202,83 @@ async def get_patient_detail_with_cases(patient_id: str):
         print(f"[PATIENT_DETAIL] ERROR: {e}")
         raise HTTPException(status_code=500, detail=str(e))
  
- 
-# ─────────────────────────────────────────────
-#  GET /api/cases/{case_id}/appointments
-#
-#  medical_cases.appointment_ids is a uuid[]
-#  with NO foreign key, so we:
-#    1. fetch the case to get appointment_ids array
-#    2. fetch appointments whose id is in that array
-# ─────────────────────────────────────────────
-@router.get("/api/cases/{case_id}/appointments")
-async def get_case_timeline(case_id: str):
+#  Get own cases
+async def get_current_patient_id(user: dict = Depends(verify_clerk_token)):
+    clerk_id = user.get("sub")
+
+    async with AsyncSessionLocal() as db:
+        res = await db.execute(
+            text("SELECT id FROM patients WHERE profile_id = :pid LIMIT 1"),
+            {"pid": clerk_id},
+        )
+        row = res.first()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    return row[0]
+    
+@router.get("/api/my/cases")
+async def get_my_cases(user=Depends(verify_clerk_token)):
+    clerk_id = user.get("sub")
     try:
-        print(f"[CASE_TIMELINE] Fetching case {case_id}")
+        print(f"[MY_CASES] Fetching cases for patient {clerk_id}")
 
-        # Step 1 – get case
-        case_response = await supabase_rest.query_table(
-            "medical_cases",
-            {
-                "select": "id, title, department, status, workflow_status",
-                "id": f"eq.{case_id}"
-            }
+        select_query = (
+            "id,full_name,age,category,status,insurers,"
+            "medical_cases!patient_id("
+            "*, "
+            "gl!gl_id(status,file_url, total_amount, rejection_reason), "
+            "claims!claims_id(status,file_url, total_amount, rejection_reason)"
+            ")"
         )
 
-        if not case_response:
-            raise HTTPException(status_code=404, detail="Case not found")
-
-        case_data = case_response[0]
-
-        # Step 2 – fetch appointments directly via case_id
-        appointments = await supabase_rest.query_table(
-            "appointments",
-            {
-                "select": """
-                    id,
-                    scheduled_at,
-                    appointment_type,
-                    urgency_level,
-                    chief_complaint,
-                    outcome_summary,
-                    status,
-                    duration_minutes,
-                    ward,
-                    bill_id,
-                    case_id,
-                    doctors (
-                        id,
-                        full_name
-                    )
-                """,
-                "case_id": f"eq.{case_id}",
-                "order": "scheduled_at.asc"
+        response = await supabase_rest.query_table(
+            "patients", {
+                # "select": """id, full_name, age, category, status, insurers,
+                #             medical_cases!patient_id(
+                #                 *,
+                #                 gl:gl!gl_id(status, file_url),
+                #                 claims:claims!claims_id(status, file_url)
+                #             )
+                #             """,
+                # "select": "*", "patient_id": f"eq.{p.get('id')}",
+                # "select": """id, full_name, age, category, status, insurers,
+                #             medical_cases(*)""",
+                "select": select_query,
+                "profile_id": f"eq.{clerk_id}"
             }
         )
+        print("[DEBUG] clerk_id:", clerk_id)
+        print("[DEBUG] raw response:", response)
 
-        # Step 3 – bills (unchanged)
-        bill_ids = [a.get("bill_id") for a in appointments if a.get("bill_id")]
-        bills_by_id = {}
+        if not response:
+            raise HTTPException(status_code=404, detail="Patient not found")
 
-        if bill_ids:
-            bills = await supabase_rest.query_table(
-                "medical_bills",
-                {
-                    "select": "id, total_bill, status, file_url",
-                    "id": f"in.({','.join(bill_ids)})"
-                }
-            )
-            bills_by_id = {b["id"]: b for b in bills}
-
-        enriched = []
-        for apt in appointments:
-            bill_info = bills_by_id.get(apt.get("bill_id"), {})
-            enriched.append({
-                **apt,
-                "total_bill": float(bill_info.get("total_bill", 0)),
-                "bill_status": bill_info.get("status"),
-                "bill_file_url": bill_info.get("file_url"),
-            })
+        p = response[0]
 
         return {
-            "success": True,
-            "case": case_data,
-            "data": enriched
+            "cases": [
+                {
+                    "id": c.get("id"),
+                    "title": c.get("title"),
+                    "department": c.get("department"),
+                    "status": c.get("status"),
+                    "workflow_status": c.get("workflow_status"),
+                    "created_at": c.get("created_at"),
+
+                    "gl": c.get("gl"),
+                    "claim": c.get("claims"),
+                }
+                for c in p.get("medical_cases", [])
+            ]
         }
 
     except Exception as e:
-        print(f"[CASE_TIMELINE] ERROR: {e}")
+        print(f"[MY_CASES] ERROR: {e}")
         raise HTTPException(status_code=500, detail=str(e))
- 
- 
+
+
 # ─────────────────────────────────────────────
 #  GET /api/patients/archived
 # ─────────────────────────────────────────────
@@ -1336,3 +1326,178 @@ async def get_archived_patients():
             status_code=500,
             detail={"success": False, "error": str(e)}
         )
+        
+# ─────────────────────────────────────────────
+#  GET /api/cases/{case_id}/appointments
+#
+#  medical_cases.appointment_ids is a uuid[]
+#  with NO foreign key, so we:
+#    1. fetch the case to get appointment_ids array
+#    2. fetch appointments whose id is in that array
+# ─────────────────────────────────────────────
+@router.get("/api/cases/{case_id}/appointments")
+async def get_case_timeline(case_id: str):
+    try:
+        print(f"[CASE_TIMELINE] Fetching case {case_id}")
+
+        # Step 1 – get case
+        case_response = await supabase_rest.query_table(
+            "medical_cases",
+            {
+                "select": "id, title, department, status, workflow_status",
+                "id": f"eq.{case_id}"
+            }
+        )
+
+        if not case_response:
+            raise HTTPException(status_code=404, detail="Case not found")
+
+        case_data = case_response[0]
+
+        # Step 2 – fetch appointments directly via case_id
+        appointments = await supabase_rest.query_table(
+            "appointments",
+            {
+                "select": """
+                    id,
+                    scheduled_at,
+                    appointment_type,
+                    urgency_level,
+                    chief_complaint,
+                    outcome_summary,
+                    status,
+                    duration_minutes,
+                    ward,
+                    bill_id,
+                    case_id,
+                    doctors:doctor_id (
+                        id,
+                        full_name
+                    )
+                """,
+                "case_id": f"eq.{case_id}",
+                "order": "scheduled_at.asc"
+            }
+        )
+
+        # Step 3 – bills (unchanged)
+        bill_ids = [a.get("bill_id") for a in appointments if a.get("bill_id")]
+        bills_by_id = {}
+
+        if bill_ids:
+            bills = await supabase_rest.query_table(
+                "medical_bills",
+                {
+                    "select": "id, total_bill, status, file_url",
+                    "id": f"in.({','.join(bill_ids)})"
+                }
+            )
+            bills_by_id = {b["id"]: b for b in bills}
+
+        enriched = []
+        for apt in appointments:
+            bill_info = bills_by_id.get(apt.get("bill_id"), {})
+            enriched.append({
+                **apt,
+                "total_bill": float(bill_info.get("total_bill", 0)),
+                "bill_status": bill_info.get("status"),
+                "bill_file_url": bill_info.get("file_url"),
+            })
+
+        return {
+            "success": True,
+            "case": case_data,
+            "data": enriched
+        }
+
+    except Exception as e:
+        print(f"[CASE_TIMELINE] ERROR: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+ 
+VALID_STATUS = {"none", "requested", "approved", "rejected"}
+
+
+def validate_status(status: str):
+    s = status.lower().strip()
+    if s not in VALID_STATUS:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    return s
+
+# @router.patch("/cases/{case_id}/gl-status")
+# async def update_gl_status(case_id: str, status: str = Query(...)):
+#     status = validate_status(status)
+
+#     res = supabase.table("medical_cases") \
+#         .update({"gl_status": status}) \
+#         .eq("id", case_id) \
+#         .execute()
+
+#     if not res.data:
+#         raise HTTPException(status_code=404, detail="Case not found")
+
+#     return {"success": True, "gl_status": status}
+
+# @router.patch("/cases/{case_id}/claim-status")
+# async def update_claim_status(case_id: str, status: str = Query(...)):
+#     status = validate_status(status)
+
+#     res = supabase.table("medical_cases") \
+#         .update({"claim_status": status}) \
+#         .eq("id", case_id) \
+#         .execute()
+
+#     if not res.data:
+#         raise HTTPException(status_code=404, detail="Case not found")
+
+#     return {"success": True, "claim_status": status}
+
+@router.patch("/cases/{case_id}/status")
+async def update_status(case_id: str, type: str, status: str):
+    status = validate_status(status)
+
+    if type not in ["gl", "claim"]:
+        raise HTTPException(400, "Invalid type")
+
+    # 1. Get related IDs
+    case_res = await supabase_rest.query_table(
+        "medical_cases",
+        {
+            "select": "gl_id, claims_id",
+            "id": f"eq.{case_id}"
+        }
+    )
+
+    if not case_res:
+        raise HTTPException(404, "Case not found")
+
+    case = case_res[0]
+    gl_id = case.get("gl_id")
+    claims_id = case.get("claims_id")
+
+    # 2. Update correct table
+    if type == "gl":
+        if gl_id:
+            await supabase_rest.update_table(
+                "gl",
+                {"status": status},
+                {"id": f"eq.{gl_id}"}
+            )
+
+        else:
+            create = await supabase_rest.update_table(
+                "gl",
+                {
+                    "case_id": case_id,
+                    "status": status
+                },
+                None,
+                method="POST"
+            )
+
+            new_gl_id = create[0]["id"]
+
+            await supabase_rest.update_table(
+                "medical_cases",
+                {"gl_id": new_gl_id},
+                {"id": f"eq.{case_id}"}
+            )

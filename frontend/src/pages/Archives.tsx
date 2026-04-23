@@ -8,12 +8,15 @@ import {
   CreditCard,
   Activity,
   FileCheck,
-  ArrowRight,
   Clock,
-  Loader2
+  Loader2,
+  ChevronLeft
 } from 'lucide-react';
+import { CaseCard, type CaseStatusType } from '../components/CaseCard';
+import { AppointmentCard, type StandardAppointment } from '../components/AppointmentCard';
 
 interface ArchivedCase {
+  rejection_reason: string;
   id: string;
   title: string;
   department: string;
@@ -32,15 +35,26 @@ interface ArchivedPatient {
   cases: ArchivedCase[];
 }
 
+interface Appointment {
+  id: string;
+  scheduled_at: string;
+  appointment_type: string;
+  urgency_level: string;
+  chief_complaint: string;
+  outcome_summary: string;
+  status: string;
+  duration_minutes: number;
+  ward: string;
+  total_bill: number;
+  bill_status: string;
+  bill_file_url?: string;
+}
+
 const API = 'http://127.0.0.1:8002';
 
-const normaliseStatus = (raw: string | null | undefined): 'none' | 'requested' | 'approved' => {
-  if (!raw) return 'none';
-  const s = raw.toLowerCase();
-  if (s === 'approved') return 'approved';
-  if (s === 'none') return 'none';
-  return 'requested';
-};
+// Remove local normaliseStatus as it is in CaseCard/AppointmentCard helper imports if needed
+// Actually CaseCard doesn't export normaliseStatus, but we can inline it or export it.
+// I'll just use the logic in CaseCard.
 
 const fetchArchivedPatients = async (): Promise<ArchivedPatient[]> => {
   const token = localStorage.getItem('token');
@@ -62,7 +76,8 @@ const fetchArchivedPatients = async (): Promise<ArchivedPatient[]> => {
       department: c.department ?? 'General',
       status: c.status ?? 'archived',
       workflowStatus: c.workflow_status ?? 'none',
-      createdAt: c.created_at ? c.created_at.split('T')[0] : '—'
+      createdAt: c.created_at ? c.created_at.split('T')[0] : '—',
+      rejection_reason: c.rejection_reason ?? '',
     }));
 
     return {
@@ -83,6 +98,9 @@ export default function Archives() {
   const [patients, setPatients] = useState<ArchivedPatient[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
+  const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
+  const [appointments, setAppointments] = useState<Record<string, Appointment[]>>({});
+  const [loadingApts, setLoadingApts] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
@@ -96,6 +114,29 @@ export default function Archives() {
       .finally(() => setLoading(false));
   }, []);
 
+  const loadAppointments = async (caseId: string) => {
+    if (appointments[caseId]) return;
+    setLoadingApts(true);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${API}/api/cases/${caseId}/appointments`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error('Failed to load appointments.');
+      const json = await res.json();
+      setAppointments(prev => ({ ...prev, [caseId]: json.data || [] }));
+    } catch (e) {
+      console.error('Error loading appointments:', e);
+    } finally {
+      setLoadingApts(false);
+    }
+  };
+
+  const handleSelectCase = async (caseId: string) => {
+    setSelectedCaseId(caseId);
+    await loadAppointments(caseId);
+  };
+
   const selectedPatient = patients.find(p => p.id === selectedPatientId) ?? null;
 
   const filteredPatients = patients.filter(p =>
@@ -103,32 +144,7 @@ export default function Archives() {
     p.id.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const renderWorkflowStatus = (raw: string) => {
-    const status = normaliseStatus(raw);
-    const colors = {
-      none: { bg: 'var(--neutral-400)', text: 'var(--text-muted)' },
-      requested: { bg: '#FFF9C4', text: '#F9A825' },
-      approved: { bg: '#E8F5E9', text: '#2E7D32' }
-    };
-    const current = colors[status];
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'center' }}>
-        <div style={{
-          fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase',
-          letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: '2px'
-        }}>
-          GL STATUS
-        </div>
-        <div style={{
-          padding: '0.35rem 0.75rem', borderRadius: '9999px',
-          backgroundColor: current.bg, color: current.text,
-          fontSize: '0.75rem', fontWeight: 700, textTransform: 'capitalize'
-        }}>
-          {status}
-        </div>
-      </div>
-    );
-  };
+  // Remove local renderWorkflowStatus as it is now in CaseCard.tsx
 
   return (
     <LayoutSidebar>
@@ -363,76 +379,83 @@ export default function Archives() {
                   </div>
                 </div>
 
-                {/* Right: archived cases */}
+                {/* Right: archived cases or appointments */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-                  <h3 style={{ fontSize: '1.25rem', fontWeight: 800 }}>Medical Cases</h3>
+                  {selectedCaseId ? (
+                    <div>
+                      <button
+                        onClick={() => setSelectedCaseId(null)}
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'none', border: 'none', color: 'var(--primary)', fontWeight: 700, fontSize: '0.95rem', cursor: 'pointer', marginBottom: '1.5rem', padding: 0 }}
+                      >
+                        <ChevronLeft size={18} /> Back to Cases
+                      </button>
 
-                  {selectedPatient.cases.length === 0 && (
-                    <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-                      No cases found for this patient.
+                      <h3 style={{ fontSize: '1.25rem', fontWeight: 800, marginBottom: '1rem' }}>Case Appointments</h3>
+
+                      {loadingApts ? (
+                        <div className="card" style={{ padding: '3rem', textAlign: 'center' }}>
+                          <Loader2 size={24} className="animate-spin" color="var(--primary)" style={{ margin: '0 auto' }} />
+                          <div style={{ marginTop: '0.75rem', color: 'var(--text-muted)' }}>Loading appointments...</div>
+                        </div>
+                      ) : (appointments[selectedCaseId] || []).length === 0 ? (
+                        <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                          No archived appointments found for this case.
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                          {(appointments[selectedCaseId] || []).map(apt => (
+                            <AppointmentCard
+                              key={apt.id}
+                              appointment={{
+                                id: apt.id,
+                                title: apt.appointment_type,
+                                scheduledAt: apt.scheduled_at,
+                                status: apt.status,
+                                urgencyLevel: apt.urgency_level,
+                                chiefComplaint: apt.chief_complaint,
+                                outcome: apt.outcome_summary,
+                                ward: apt.ward,
+                                totalBill: apt.total_bill,
+                                billStatus: apt.bill_status,
+                                billFileUrl: apt.bill_file_url,
+                                durationMinutes: apt.duration_minutes
+                              } as StandardAppointment}
+                              showActions={false}
+                            />
+                          ))}
+                        </div>
+                      )}
                     </div>
+                  ) : (
+                    <>
+                      <h3 style={{ fontSize: '1.25rem', fontWeight: 800 }}>Medical Cases</h3>
+
+                      {selectedPatient.cases.length === 0 && (
+                        <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                          No cases found for this patient.
+                        </div>
+                      )}
+
+                      {selectedPatient.cases.map((c, i) => (
+                        <CaseCard
+                          key={c.id ?? i}
+                          caseData={{
+                            id: c.id,
+                            title: c.title,
+                            department: c.department,
+                            status: 'Archived',
+                            workflow_status: c.workflowStatus,
+                            gl_status: (c.workflowStatus === 'approved' ? 'approved' : c.workflowStatus === 'requested' ? 'requested' : 'none') as CaseStatusType,
+                            claim_status: 'none',
+                            totalBill: 0,
+                            rejection_reason: c.rejection_reason,
+                            created_at: c.createdAt,
+                          }}
+                          onClick={() => handleSelectCase(c.id)}
+                        />
+                      ))}
+                    </>
                   )}
-
-                  {selectedPatient.cases.map((c, i) => (
-                    <div key={c.id ?? i} className="card" style={{ padding: '0' }}>
-                      <div style={{
-                        padding: '1.5rem',
-                        display: 'grid',
-                        gridTemplateColumns: '2fr 1fr 1fr 1fr',
-                        gap: '1.5rem',
-                        alignItems: 'center'
-                      }}>
-                        {/* Case name — click navigates to case details */}
-                        <div style={{ cursor: 'pointer' }} onClick={() => navigate(`/cases/${c.id}`)}>
-                          <div style={{
-                            fontSize: '1.125rem', fontWeight: 800, color: 'var(--primary)',
-                            marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '0.5rem'
-                          }}>
-                            {c.title} <ArrowRight size={14} />
-                          </div>
-                          <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', fontWeight: 600 }}>
-                            {c.department} Department
-                          </div>
-                        </div>
-
-                        {/* GL / Workflow status */}
-                        {renderWorkflowStatus(c.workflowStatus)}
-
-                        {/* Case status badge */}
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'center' }}>
-                          <div style={{
-                            fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase',
-                            letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: '2px'
-                          }}>
-                            Case Status
-                          </div>
-                          <div style={{
-                            padding: '0.35rem 0.75rem', borderRadius: '9999px',
-                            backgroundColor: 'var(--neutral-400)', color: '#455A64',
-                            fontSize: '0.75rem', fontWeight: 700, textTransform: 'capitalize'
-                          }}>
-                            {c.status}
-                          </div>
-                        </div>
-
-                        {/* Archived date */}
-                        <div style={{ textAlign: 'right' }}>
-                          <div style={{
-                            fontSize: '0.65rem', fontWeight: 800, color: 'var(--text-muted)',
-                            textTransform: 'uppercase', marginBottom: '8px'
-                          }}>
-                            Date
-                          </div>
-                          <div style={{
-                            fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-main)',
-                            display: 'flex', alignItems: 'center', gap: '0.4rem', justifyContent: 'flex-end'
-                          }}>
-                            <Clock size={13} /> {c.createdAt}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
                 </div>
               </div>
             </div>

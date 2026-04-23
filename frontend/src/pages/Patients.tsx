@@ -11,13 +11,16 @@ import {
   Plus,
   ArrowRight
 } from 'lucide-react';
+import { CaseCard, type StandardCase, type CaseStatusType } from '../components/CaseCard';
 
 interface Case {
+  rejection_reason: string;
+  workflow_status: string;
   id: string;
   type: string;
   department: string;
-  glStatus: 'none' | 'requested' | 'approved';
-  claimStatus: 'none' | 'requested' | 'approved';
+  glStatus: 'none' | 'requested' | 'approved' | 'rejected';
+  claimStatus: 'none' | 'requested' | 'approved' | 'rejected';
   totalBill: number;
 }
 
@@ -35,13 +38,7 @@ interface Patient {
 const API = 'http://127.0.0.1:8002';
 
 // ✅ Module-level pure function — no hooks here
-const normaliseStatus = (raw: string | null | undefined): 'none' | 'requested' | 'approved' => {
-  if (!raw) return 'none';
-  const s = raw.toLowerCase();
-  if (s === 'approved') return 'approved';
-  if (s === 'none') return 'none';
-  return 'requested'; // covers: requested, pending, supervision required, etc.
-};
+// Remove local normaliseStatus as it is handled by the data mapping logic or component
 
 const fetchPatients = async (): Promise<Patient[]> => {
   const token = localStorage.getItem('token');
@@ -62,9 +59,11 @@ const fetchPatients = async (): Promise<Patient[]> => {
         id: c.id,
         type: c.title ?? 'Untitled Case',
         department: c.department ?? 'General',
-        glStatus: normaliseStatus(c.workflow_status),
+        glStatus: c.workflow_status,
         claimStatus: 'none',
-        totalBill: 0
+        totalBill: 0,
+        workflow_status: '',
+        rejection_reason: c.rejection_reason
       }));
       return {
         id: p.id,
@@ -109,44 +108,7 @@ export default function Patients() {
 
   const selectedPatient = patients.find(p => p.id === selectedPatientId) ?? null;
 
-  const renderStatus = (
-    status: 'none' | 'requested' | 'approved',
-    type: 'GL' | 'Claim'
-  ) => {
-    const colors = {
-      none: { bg: 'var(--neutral-400)', text: 'var(--text-muted)' },
-      requested: { bg: '#FFF9C4', text: '#F9A825' },
-      approved: { bg: '#E8F5E9', text: '#2E7D32' }
-    };
-    const current = colors[status];
-
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'center' }}>
-        <div style={{
-          fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase',
-          letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: '2px'
-        }}>
-          {type} STATUS
-        </div>
-        <div style={{
-          padding: '0.35rem 0.75rem', borderRadius: '9999px',
-          backgroundColor: current.bg, color: current.text,
-          fontSize: '0.75rem', fontWeight: 700, textTransform: 'capitalize'
-        }}>
-          {status}
-        </div>
-        {status === 'requested' && (
-          <button style={{
-            marginTop: '4px', backgroundColor: 'var(--primary)', color: 'white',
-            padding: '0.5rem 1rem', borderRadius: '8px', fontSize: '0.875rem',
-            fontWeight: 700, width: '100%', boxShadow: '0 4px 10px rgba(30,136,229,0.2)'
-          }}>
-            Generate
-          </button>
-        )}
-      </div>
-    );
-  };
+  // Remove local renderStatus as it is now in CaseCard.tsx
 
   // ✅ PatientList defined inside component so it can close over state
   const PatientList = ({
@@ -413,44 +375,21 @@ export default function Patients() {
                   )}
 
                   {selectedPatient.cases.map((c, i) => (
-                    <div key={c.id ?? i} className="card" style={{ padding: '0' }}>
-                      <div style={{
-                        padding: '1.5rem',
-                        display: 'grid',
-                        gridTemplateColumns: '2fr 1fr 1fr 1fr',
-                        gap: '1.5rem',
-                        alignItems: 'center'
-                      }}>
-                        <div style={{ cursor: 'pointer' }} onClick={() => navigate(`/cases/${c.id}`)}>
-                          <div style={{
-                            fontSize: '1.125rem', fontWeight: 800, color: 'var(--primary)',
-                            marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '0.5rem'
-                          }}>
-                            {c.type} <ArrowRight size={14} />
-                          </div>
-                          <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', fontWeight: 600 }}>
-                            {c.department} Department
-                          </div>
-                        </div>
-
-                        {renderStatus(c.glStatus, 'GL')}
-                        {renderStatus(c.claimStatus, 'Claim')}
-
-                        <div style={{ textAlign: 'right' }}>
-                          <div style={{
-                            fontSize: '0.65rem', fontWeight: 800, color: 'var(--text-muted)',
-                            textTransform: 'uppercase', marginBottom: '8px'
-                          }}>
-                            Total Bill
-                          </div>
-                          <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-main)' }}>
-                            {c.totalBill > 0
-                              ? `RM ${c.totalBill.toLocaleString(undefined, { minimumFractionDigits: 2 })}`
-                              : '—'}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                    <CaseCard
+                      key={c.id ?? i}
+                      caseData={{
+                        id: c.id,
+                        title: c.type, // Patients.tsx uses .type for title
+                        department: c.department,
+                        status: c.workflow_status,
+                        workflow_status: c.workflow_status,
+                        gl_status: c.glStatus as CaseStatusType,
+                        claim_status: c.claimStatus as CaseStatusType,
+                        totalBill: c.totalBill,
+                        rejection_reason: c.rejection_reason
+                      }}
+                      onClick={() => navigate(`/cases/${c.id}`)}
+                    />
                   ))}
                 </div>
               </div>
