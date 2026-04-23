@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '@clerk/clerk-react';
 import LayoutSidebar from '../components/LayoutSidebar';
 import { capacityRoomStyle } from '../utils/capacityRoomStyle';
-import { Filter, Mic, CircleDot, UserPlus, Search, LayoutGrid, Users, Square, Loader2 } from 'lucide-react';
+import { Filter, Mic, CircleDot, UserPlus, Search, LayoutGrid, Users, Square } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
 const API = 'http://127.0.0.1:8002';
@@ -25,6 +25,26 @@ export default function LiveTriage() {
   const [newName, setNewName] = useState("");
   const [newComplaint, setNewComplaint] = useState("");
   const [newLevel, setNewLevel] = useState<number>(3);
+  const [newIcNumber, setNewIcNumber] = useState("");
+  const [newPhone, setNewPhone] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [isNewPatientMode, setIsNewPatientMode] = useState(false);
+  const [addPatientErrors, setAddPatientErrors] = useState<{[key: string]: string}>({});
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [showSearchResults, setShowSearchResults] = useState(false);
+
+  const [showOverrideModal, setShowOverrideModal] = useState(false);
+  const [overridePatient, setOverridePatient] = useState<any>(null);
+  const [overrideLevel, setOverrideLevel] = useState(3);
+  const [overrideDiagnosis, setOverrideDiagnosis] = useState("");
+  const [overrideDeptId, setOverrideDeptId] = useState("");
+  const [overrideDocId, setOverrideDocId] = useState("");
+  const [overrideBP, setOverrideBP] = useState("");
+  const [overrideHR, setOverrideHR] = useState("");
+  const [overrideO2, setOverrideO2] = useState("");
+  const [allDoctors, setAllDoctors] = useState<any[]>([]);
+  const [filteredDoctors, setFilteredDoctors] = useState<any[]>([]);
+  const [overrideErrors, setOverrideErrors] = useState<{[key: string]: string}>({});
 
   const [dashboardTab, setDashboardTab] = useState<'flow' | 'capacity'>('flow');
   const [boardData, setBoardData] = useState<{ departments: any[] } | null>(null);
@@ -33,16 +53,10 @@ export default function LiveTriage() {
     doctors: [],
   });
 
-  const [showOverrideModal, setShowOverrideModal] = useState(false);
-  const [overridePatient, setOverridePatient] = useState<any>(null);
-  const [overrideLevel, setOverrideLevel] = useState(3);
-  const [overrideDiagnosis, setOverrideDiagnosis] = useState("");
-  const [overrideDeptId, setOverrideDeptId] = useState("");
-  const [overrideDocId, setOverrideDocId] = useState("");
-
   const [recordingModalOpen, setRecordingModalOpen] = useState(false);
   const [recordingActive, setRecordingActive] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [recordingPaused, setRecordingPaused] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
@@ -71,13 +85,52 @@ export default function LiveTriage() {
     return () => clearInterval(interval);
   }, [fetchData]);
 
-  const openOverrideModal = (patient: any) => {
+  // Timer effect for recording
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval>;
+    if (recordingActive && !recordingPaused) {
+      timer = setInterval(() => {
+        setRecordingSeconds(prev => prev + 1);
+      }, 1000);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [recordingActive, recordingPaused]);
+
+  const openOverrideModal = async (patient: any) => {
     setOverridePatient(patient);
     setOverrideLevel(patient.level);
     setOverrideDiagnosis(patient.diagnosis || "");
-    // Note: We'll need to map names to IDs if we use the same dropdowns
-    setOverrideDeptId(""); 
-    setOverrideDocId("");
+    setOverrideBP(patient.blood_pressure || "");
+    setOverrideHR(patient.heart_rate || "");
+    setOverrideO2(patient.oxygen_saturation || "");
+    setOverrideDeptId(patient.department_id || "");
+    setOverrideDocId(patient.doctor_id || "");
+    setOverrideErrors({});
+
+    // Load doctors from database
+    try {
+      const token = await getToken();
+      const response = await fetch(`${API}/api/doctors`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await response.json();
+      setAllDoctors(data.doctors || []);
+
+      // Filter doctors by department if set
+      if (patient.department_id) {
+        const filtered = (data.doctors || []).filter(
+          (d: any) => d.department_id === patient.department_id
+        );
+        setFilteredDoctors(filtered);
+      } else {
+        setFilteredDoctors(data.doctors || []);
+      }
+    } catch (e) {
+      console.error('Failed to load doctors:', e);
+    }
+
     setShowOverrideModal(true);
   };
 
@@ -85,7 +138,7 @@ export default function LiveTriage() {
     if (!overridePatient) return;
     try {
       const token = await getToken();
-      await fetch(`${API}/api/triage/override/${overridePatient.id}`, {
+      const response = await fetch(`${API}/api/triage/override/${overridePatient.id}`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -96,35 +149,111 @@ export default function LiveTriage() {
           diagnosis: overrideDiagnosis,
           department_id: overrideDeptId || null,
           doctor_id: overrideDocId || null,
-          status: overridePatient.status // keep current status
+          status: overridePatient.status,
+          blood_pressure: overrideBP || null,
+          heart_rate: overrideHR || null,
+          oxygen_saturation: overrideO2 || null
         })
       });
+
+      if (!response.ok) {
+        const error = await response.text();
+        console.error('Override error:', error);
+        setOverrideErrors({ submit: 'Failed to update patient' });
+        return;
+      }
+
+      // Also update vitals separately if they changed
+      if (overrideBP || overrideHR || overrideO2) {
+        await fetch(`${API}/api/patients/${overridePatient.id}/vitals`, {
+          method: 'PATCH',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            blood_pressure: overrideBP,
+            heart_rate: overrideHR,
+            oxygen_saturation: overrideO2
+          })
+        });
+      }
+
       setShowOverrideModal(false);
+      setOverrideErrors({});
       fetchData();
     } catch (e) {
-      console.error(e);
+      console.error('Override error:', e);
+      setOverrideErrors({ submit: 'Error updating patient' });
     }
   };
 
+  const validateEmail = (email: string): boolean => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  };
+
+  const validatePhone = (phone: string): boolean => {
+    const phoneRegex = /^[0-9\s\-\+\(\)]{7,}$/;
+    return phoneRegex.test(phone.trim());
+  };
+
+  const validateAddPatient = (): boolean => {
+    const errors: {[key: string]: string} = {};
+
+    if (!newName.trim()) errors.name = "Patient name is required";
+    if (!newIcNumber.trim()) errors.icNumber = "IC number is required";
+    if (!newPhone.trim()) errors.phone = "Phone number is required";
+    else if (!validatePhone(newPhone)) errors.phone = "Invalid phone number format";
+    if (newEmail.trim() && !validateEmail(newEmail)) errors.email = "Invalid email format";
+    if (!newComplaint.trim()) errors.complaint = "Chief complaint is required";
+
+    setAddPatientErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
   const handleAddPatient = async () => {
-    if (!newName.trim() || !newComplaint.trim()) return;
+    if (!validateAddPatient()) return;
+
     try {
       const token = await getToken();
-      await fetch(`${API}/api/triage/simulate`, {
+      const response = await fetch(`${API}/api/triage/register`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({ name: newName, complaint: newComplaint, level: newLevel })
+        body: JSON.stringify({ 
+          name: newName, 
+          complaint: newComplaint, 
+          level: newLevel,
+          ic_number: newIcNumber,
+          phone: newPhone,
+          email: newEmail
+        })
       });
+
+      if (!response.ok) {
+        const error = await response.text();
+        console.error('Registration error:', error);
+        setAddPatientErrors({ submit: 'Failed to register patient. Please try again.' });
+        return;
+      }
+
       setShowAddModal(false);
       setNewName("");
       setNewComplaint("");
       setNewLevel(3);
+      setNewIcNumber("");
+      setNewPhone("");
+      setNewEmail("");
+      setIsNewPatientMode(false);
+      setAddPatientErrors({});
+      setSearchResults([]);
       fetchData();
     } catch (e) {
-      console.error(e);
+      console.error('Add patient error:', e);
+      setAddPatientErrors({ submit: 'Error registering patient' });
     }
   };
 
@@ -194,12 +323,22 @@ export default function LiveTriage() {
     if (recordingActive && !window.confirm('Discard this recording?')) return;
     setRecordingModalOpen(false);
     setRecordingActive(false);
+    setRecordingPaused(false);
     setRecordingSeconds(0);
   };
 
   const startRecording = () => {
     setRecordingSeconds(0);
+    setRecordingPaused(false);
     setRecordingActive(true);
+  };
+
+  const pauseRecording = () => {
+    setRecordingPaused(true);
+  };
+
+  const resumeRecording = () => {
+    setRecordingPaused(false);
   };
 
   const stopRecordingAndInsert = () => {
@@ -207,6 +346,7 @@ export default function LiveTriage() {
     const snippet = `[Dictation ${stamp}] Further history on ROS; denies recent travel; family history reviewed (simulated transcript).\n`;
     setObjectiveNote((prev) => (prev ? `${prev.trim()}\n\n${snippet}` : snippet));
     setRecordingActive(false);
+    setRecordingPaused(false);
     setRecordingModalOpen(false);
     setRecordingSeconds(0);
   };
@@ -222,9 +362,6 @@ export default function LiveTriage() {
   }
 
   if (!data) return null;
-
-  const overrideDeptOptions = [...new Set(['Triage Queue', ...facilityCatalog.departments])];
-  const overrideDocOptions = [{ name: 'Unassigned', department: 'Triage Queue' }, ...facilityCatalog.doctors];
 
   const currentUtilization = Math.min(100, Math.round((data.queue_active / 20) * 100));
   
@@ -743,7 +880,7 @@ export default function LiveTriage() {
                 <div>
                    <h3 style={{ fontSize: '0.75rem', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>Chief Complaint</h3>
                    <div style={{ background: '#f0f4f8', border: '1px solid #d9e2ec', color: '#102a43', borderRadius: '12px', padding: '1.25rem', fontSize: '1.125rem', fontWeight: 600 }}>
-                     {data.patients?.find((p:any) => p.id === data.active_encounter?.id)?.complaint || "No complaint recorded."}
+                     {data.active_encounter?.complaint || "No complaint recorded."}
                    </div>
                 </div>
 
@@ -752,15 +889,21 @@ export default function LiveTriage() {
                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
                      <div style={{ background: 'var(--neutral-200)', padding: '1.25rem', borderRadius: '12px' }}>
                        <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 600, marginBottom: '0.25rem' }}>BLOOD PRESSURE</div>
-                       <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{data.ai_scribe?.vitals?.bp || "-"}</div>
+                       <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>
+                         {data.active_encounter?.metadata_data?.blood_pressure || data.ai_scribe?.vitals?.bp || "-"}
+                       </div>
                      </div>
                      <div style={{ background: 'var(--neutral-200)', padding: '1.25rem', borderRadius: '12px' }}>
                        <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 600, marginBottom: '0.25rem' }}>HEART RATE</div>
-                       <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#ba1a1a' }}>{data.ai_scribe?.vitals?.hr || "-"}</div>
+                       <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#ba1a1a' }}>
+                         {data.active_encounter?.metadata_data?.heart_rate || data.ai_scribe?.vitals?.hr || "-"}
+                       </div>
                      </div>
                      <div style={{ background: 'var(--neutral-200)', padding: '1.25rem', borderRadius: '12px' }}>
                        <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 600, marginBottom: '0.25rem' }}>OXYGEN SAT.</div>
-                       <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{data.ai_scribe?.vitals?.o2 || "-"}</div>
+                       <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>
+                         {data.active_encounter?.metadata_data?.oxygen_saturation || data.ai_scribe?.vitals?.o2 || "-"}
+                       </div>
                      </div>
                    </div>
                 </div>
@@ -768,7 +911,7 @@ export default function LiveTriage() {
                 <div>
                    <h3 style={{ fontSize: '0.75rem', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--primary)', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><CircleDot size={12}/> Z.ai Triage Reasoning</h3>
                    <div style={{ background: '#e0f2fe', border: '1px solid #7dd3fc', color: '#0369a1', borderRadius: '12px', padding: '1.25rem', fontSize: '0.875rem', fontWeight: 600, lineHeight: '1.5' }}>
-                     {data.patients?.find((p:any) => p.id === data.active_encounter?.id)?.ai_reasoning || "AI reasoning unavailable for this patient."}
+                     {data.active_encounter?.ai_reasoning || "AI reasoning unavailable for this patient."}
                    </div>
                 </div>
               </div>
@@ -968,24 +1111,50 @@ export default function LiveTriage() {
                   Start recording
                 </button>
               ) : (
-                <button
-                  type="button"
-                  onClick={stopRecordingAndInsert}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '0.5rem',
-                    padding: '0.75rem',
-                    fontWeight: 700,
-                    borderRadius: '10px',
-                    border: '1px solid var(--neutral-400)',
-                    background: 'white',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <Square size={16} fill="currentColor" /> Stop & append to Objective
-                </button>
+                <>
+                  <div style={{ display: 'flex', gap: '0.65rem' }}>
+                    <button
+                      type="button"
+                      onClick={recordingPaused ? resumeRecording : pauseRecording}
+                      style={{
+                        flex: 1,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '0.5rem',
+                        padding: '0.75rem',
+                        fontWeight: 700,
+                        borderRadius: '10px',
+                        border: '1px solid var(--neutral-400)',
+                        background: recordingPaused ? 'var(--primary)' : '#fff3cd',
+                        color: recordingPaused ? 'white' : '#332701',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s'
+                      }}
+                    >
+                      {recordingPaused ? '▶ Resume' : '⏸ Pause'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={stopRecordingAndInsert}
+                      style={{
+                        flex: 1,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '0.5rem',
+                        padding: '0.75rem',
+                        fontWeight: 700,
+                        borderRadius: '10px',
+                        border: '1px solid var(--neutral-400)',
+                        background: 'white',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <Square size={16} fill="currentColor" /> Stop & append
+                    </button>
+                  </div>
+                </>
               )}
               <button type="button" className="btn-secondary" style={{ padding: '0.65rem', fontWeight: 700 }} onClick={closeRecordingModal}>
                 Close
@@ -995,55 +1164,223 @@ export default function LiveTriage() {
         </div>
       )}
 
-      {/* Add Patient Modal (Simulate) */}
+      {/* Add Patient Modal */}
       {showAddModal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
-          <div className="card" style={{ width: '100%', maxWidth: '500px', padding: '2.5rem', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)' }}>
-            <h2 style={{ fontSize: '1.5rem', marginBottom: '2rem', fontWeight: 700 }}>Intake New Patient</h2>
-            
-            <div style={{ marginBottom: '1.5rem' }}>
-              <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Full Name</label>
-              <input 
-                type="text" 
-                value={newName} 
-                onChange={e => setNewName(e.target.value)} 
-                placeholder="Patient's legal name..."
-                style={{ width: '100%', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid var(--neutral-400)', fontSize: '1rem', outline: 'none', background: 'var(--neutral-100)' }}
-              />
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)', padding: '1rem' }}>
+          <div className="card" style={{ width: '100%', maxWidth: '550px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)' }}>
+            {/* Header */}
+            <div style={{ padding: '2rem 2rem 1rem 2rem', borderBottom: '1px solid var(--neutral-400)' }}>
+              <h2 style={{ fontSize: '1.5rem', marginBottom: '0.5rem', fontWeight: 700 }}>Add New Patient</h2>
+              <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', margin: 0 }}>Register a new patient and add to the queue</p>
             </div>
 
-            <div style={{ marginBottom: '1.5rem' }}>
-              <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Chief Complaint</label>
-              <textarea 
-                value={newComplaint} 
-                onChange={e => setNewComplaint(e.target.value)} 
-                placeholder="Describe symptoms briefly..."
-                style={{ width: '100%', minHeight: '80px', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid var(--neutral-400)', fontSize: '1rem', outline: 'none', resize: 'vertical', background: 'var(--neutral-100)' }}
-              />
-            </div>
+            {/* Scrollable Content */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+              
+              {/* Error Message */}
+              {addPatientErrors.submit && (
+                <div style={{ background: '#fee2e2', border: '1px solid #fecaca', color: '#991b1b', padding: '1rem', borderRadius: '8px', fontSize: '0.875rem', fontWeight: 600 }}>
+                  {addPatientErrors.submit}
+                </div>
+              )}
 
-            <div style={{ marginBottom: '2.5rem' }}>
-              <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Initial Urgency</label>
-              <div style={{ display: 'flex', gap: '1rem' }}>
-                {[1, 2, 3].map(lvl => (
-                  <button 
-                    key={lvl}
-                    onClick={() => setNewLevel(lvl)} 
-                    style={{ 
-                      flex: 1, padding: '1rem 0.5rem', borderRadius: '8px', 
-                      border: newLevel === lvl ? `2px solid ${lvl === 1 ? '#ba1a1a' : lvl === 2 ? 'var(--secondary)' : 'var(--primary)'}` : '1px solid var(--neutral-400)', 
-                      background: newLevel === lvl ? (lvl === 1 ? '#ffdad6' : lvl === 2 ? '#e0f2fe' : '#dbeafe') : 'white', 
-                      color: newLevel === lvl ? (lvl === 1 ? '#ba1a1a' : lvl === 2 ? 'var(--secondary)' : 'var(--primary)') : 'var(--text-muted)', 
-                      fontWeight: 700, cursor: 'pointer', transition: 'all 0.2s', fontSize: '0.875rem' 
+              {/* Patient Name with Search */}
+              <div style={{ position: 'relative' }}>
+                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Patient Name *</label>
+                <input 
+                  type="text" 
+                  value={newName} 
+                  onChange={(e) => {
+                    setNewName(e.target.value);
+                    setAddPatientErrors({ ...addPatientErrors, name: '' });
+                    // Search in existing patients from queue
+                    if (e.target.value.length > 0 && data?.patients) {
+                      const results = data.patients.filter((p: any) => 
+                        p.name.toLowerCase().includes(e.target.value.toLowerCase())
+                      );
+                      setSearchResults(results);
+                      setShowSearchResults(results.length > 0);
+                    } else {
+                      setShowSearchResults(false);
+                    }
+                  }}
+                  placeholder="Start typing patient name..."
+                  style={{ 
+                    width: '100%', 
+                    padding: '0.75rem 1rem', 
+                    borderRadius: '8px', 
+                    border: addPatientErrors.name ? '2px solid #dc2626' : '1px solid var(--neutral-400)', 
+                    fontSize: '1rem', 
+                    outline: 'none', 
+                    background: 'var(--neutral-100)' 
+                  }}
+                />
+                {addPatientErrors.name && <div style={{ color: '#dc2626', fontSize: '0.75rem', marginTop: '0.25rem', fontWeight: 500 }}>{addPatientErrors.name}</div>}
+                
+                {/* Search Results Dropdown */}
+                {showSearchResults && searchResults.length > 0 && (
+                  <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid var(--neutral-400)', borderRadius: '8px', marginTop: '4px', zIndex: 10, boxShadow: '0 4px 12px rgba(0,0,0,0.1)', maxHeight: '200px', overflowY: 'auto' }}>
+                    {searchResults.map((patient: any) => (
+                      <div 
+                        key={patient.id}
+                        onClick={() => {
+                          setNewName(patient.name);
+                          setNewComplaint(patient.complaint || '');
+                          setNewLevel(patient.level || 3);
+                          setShowSearchResults(false);
+                          setAddPatientErrors({});
+                        }}
+                        style={{ padding: '0.75rem 1rem', cursor: 'pointer', borderBottom: '1px solid var(--neutral-200)', fontSize: '0.875rem', fontWeight: 600 }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--neutral-100)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                      >
+                        {patient.name} <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: '0.75rem' }}>Level {patient.level}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* IC Number */}
+              <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem' }}>IC Number *</label>
+                <input 
+                  type="text" 
+                  value={newIcNumber} 
+                  onChange={(e) => {
+                    setNewIcNumber(e.target.value);
+                    setAddPatientErrors({ ...addPatientErrors, icNumber: '' });
+                  }}
+                  placeholder="National ID or IC number..."
+                  style={{ 
+                    width: '100%', 
+                    padding: '0.75rem 1rem', 
+                    borderRadius: '8px', 
+                    border: addPatientErrors.icNumber ? '2px solid #dc2626' : '1px solid var(--neutral-400)', 
+                    fontSize: '1rem', 
+                    outline: 'none', 
+                    background: 'var(--neutral-100)' 
+                  }}
+                />
+                {addPatientErrors.icNumber && <div style={{ color: '#dc2626', fontSize: '0.75rem', marginTop: '0.25rem', fontWeight: 500 }}>{addPatientErrors.icNumber}</div>}
+              </div>
+
+              {/* Phone and Email */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Phone *</label>
+                  <input 
+                    type="tel" 
+                    value={newPhone} 
+                    onChange={(e) => {
+                      setNewPhone(e.target.value);
+                      setAddPatientErrors({ ...addPatientErrors, phone: '' });
                     }}
-                  >Level {lvl}</button>
-                ))}
+                    placeholder="Contact number..."
+                    style={{ 
+                      width: '100%', 
+                      padding: '0.75rem 1rem', 
+                      borderRadius: '8px', 
+                      border: addPatientErrors.phone ? '2px solid #dc2626' : '1px solid var(--neutral-400)', 
+                      fontSize: '1rem', 
+                      outline: 'none', 
+                      background: 'var(--neutral-100)' 
+                    }}
+                  />
+                  {addPatientErrors.phone && <div style={{ color: '#dc2626', fontSize: '0.75rem', marginTop: '0.25rem', fontWeight: 500 }}>{addPatientErrors.phone}</div>}
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Email (Optional)</label>
+                  <input 
+                    type="email" 
+                    value={newEmail} 
+                    onChange={(e) => {
+                      setNewEmail(e.target.value);
+                      setAddPatientErrors({ ...addPatientErrors, email: '' });
+                    }}
+                    placeholder="user@example.com"
+                    style={{ 
+                      width: '100%', 
+                      padding: '0.75rem 1rem', 
+                      borderRadius: '8px', 
+                      border: addPatientErrors.email ? '2px solid #dc2626' : '1px solid var(--neutral-400)', 
+                      fontSize: '1rem', 
+                      outline: 'none', 
+                      background: 'var(--neutral-100)' 
+                    }}
+                  />
+                  {addPatientErrors.email && <div style={{ color: '#dc2626', fontSize: '0.75rem', marginTop: '0.25rem', fontWeight: 500 }}>{addPatientErrors.email}</div>}
+                </div>
+              </div>
+
+              {/* Chief Complaint */}
+              <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Chief Complaint *</label>
+                <textarea 
+                  value={newComplaint} 
+                  onChange={(e) => {
+                    setNewComplaint(e.target.value);
+                    setAddPatientErrors({ ...addPatientErrors, complaint: '' });
+                  }}
+                  placeholder="Describe symptoms briefly..."
+                  style={{ 
+                    width: '100%', 
+                    minHeight: '60px', 
+                    padding: '0.75rem 1rem', 
+                    borderRadius: '8px', 
+                    border: addPatientErrors.complaint ? '2px solid #dc2626' : '1px solid var(--neutral-400)', 
+                    fontSize: '1rem', 
+                    outline: 'none', 
+                    resize: 'none', 
+                    background: 'var(--neutral-100)', 
+                    fontFamily: 'inherit' 
+                  }}
+                />
+                {addPatientErrors.complaint && <div style={{ color: '#dc2626', fontSize: '0.75rem', marginTop: '0.25rem', fontWeight: 500 }}>{addPatientErrors.complaint}</div>}
+              </div>
+
+              {/* Urgency Level */}
+              <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Assigned Urgency Level</label>
+                <div style={{ display: 'flex', gap: '1rem' }}>
+                  <button 
+                    onClick={() => setNewLevel(1)} 
+                    style={{ flex: 1, padding: '1rem 0.5rem', borderRadius: '8px', border: newLevel === 1 ? '2px solid #ba1a1a' : '1px solid var(--neutral-400)', background: newLevel === 1 ? '#ffdad6' : 'white', color: newLevel === 1 ? '#ba1a1a' : 'var(--text-muted)', fontWeight: 700, cursor: 'pointer', transition: 'all 0.2s', fontSize: '0.875rem' }}
+                  >Level 1<br/><span style={{ fontSize: '0.75rem', fontWeight: 500 }}>(Critical)</span></button>
+                  <button 
+                    onClick={() => setNewLevel(2)} 
+                    style={{ flex: 1, padding: '1rem 0.5rem', borderRadius: '8px', border: newLevel === 2 ? '2px solid var(--secondary)' : '1px solid var(--neutral-400)', background: newLevel === 2 ? '#e0f2fe' : 'white', color: newLevel === 2 ? 'var(--secondary)' : 'var(--text-muted)', fontWeight: 700, cursor: 'pointer', transition: 'all 0.2s', fontSize: '0.875rem' }}
+                  >Level 2<br/><span style={{ fontSize: '0.75rem', fontWeight: 500 }}>(Urgent)</span></button>
+                  <button 
+                    onClick={() => setNewLevel(3)} 
+                    style={{ flex: 1, padding: '1rem 0.5rem', borderRadius: '8px', border: newLevel === 3 ? '2px solid var(--primary)' : '1px solid var(--neutral-400)', background: newLevel === 3 ? '#dbeafe' : 'white', color: newLevel === 3 ? 'var(--primary)' : 'var(--text-muted)', fontWeight: 700, cursor: 'pointer', transition: 'all 0.2s', fontSize: '0.875rem' }}
+                  >Level 3<br/><span style={{ fontSize: '0.75rem', fontWeight: 500 }}>(Standard)</span></button>
+                </div>
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: '1rem' }}>
-              <button className="btn-secondary" onClick={() => setShowAddModal(false)} style={{ flex: 1, padding: '0.75rem' }}>Cancel</button>
-              <button className="btn-primary" onClick={handleAddPatient} style={{ flex: 2, padding: '0.75rem' }} disabled={!newName.trim()}>Register Patient</button>
+            {/* Footer with Buttons */}
+            <div style={{ padding: '1.5rem 2rem', borderTop: '1px solid var(--neutral-400)', display: 'flex', gap: '1rem' }}>
+              <button 
+                className="btn-secondary" 
+                onClick={() => { 
+                  setShowAddModal(false);
+                  setNewName(""); setNewComplaint(""); setNewLevel(3); 
+                  setNewIcNumber(""); setNewPhone(""); setNewEmail("");
+                  setAddPatientErrors({});
+                  setSearchResults([]);
+                }} 
+                style={{ flex: 1, padding: '0.75rem', background: 'var(--neutral-200)', border: 'none', fontWeight: 700 }}
+              >
+                Cancel
+              </button>
+              <button 
+                className="btn-primary" 
+                onClick={handleAddPatient} 
+                style={{ flex: 2, padding: '0.75rem', fontWeight: 700 }}
+              >
+                Add to Live Queue
+              </button>
             </div>
           </div>
         </div>
@@ -1051,49 +1388,163 @@ export default function LiveTriage() {
 
       {/* Override Patient Modal */}
       {showOverrideModal && overridePatient && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
-          <div className="card" style={{ width: '100%', maxWidth: '500px', padding: '2.5rem', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)' }}>
-            <h2 style={{ fontSize: '1.5rem', marginBottom: '2rem', fontWeight: 700 }}>Admin Clinical Override</h2>
-            
-            <div style={{ marginBottom: '1.5rem' }}>
-              <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Urgency Level</label>
-              <select value={overrideLevel} onChange={e => setOverrideLevel(Number(e.target.value))} style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--neutral-400)', fontSize: '1rem', outline: 'none', background: 'var(--neutral-100)' }}>
-                <option value={1}>Level 1 (Critical)</option>
-                <option value={2}>Level 2 (Urgent)</option>
-                <option value={3}>Level 3 (Standard)</option>
-              </select>
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)', padding: '1rem' }}>
+          <div className="card" style={{ width: '100%', maxWidth: '600px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)' }}>
+            {/* Header */}
+            <div style={{ padding: '2rem 2rem 1rem 2rem', borderBottom: '1px solid var(--neutral-400)' }}>
+              <h2 style={{ fontSize: '1.5rem', marginBottom: '0.5rem', fontWeight: 700 }}>Edit Patient: {overridePatient.name}</h2>
+              <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', margin: 0 }}>Update clinical information and assignment</p>
             </div>
 
-            <div style={{ marginBottom: '2.5rem', display: 'flex', gap: '1rem' }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Department</label>
-                <select 
-                  value={overrideDeptId} 
-                  onChange={e => setOverrideDeptId(e.target.value)} 
-                  style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--neutral-400)', fontSize: '0.875rem', outline: 'none', background: 'var(--neutral-100)' }}
-                >
-                  <option value="">Select Dept</option>
-                  {(boardData?.departments || []).map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}
-                </select>
-              </div>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Assigned Doctor</label>
-                <select 
-                  value={overrideDocId} 
-                  onChange={e => setOverrideDocId(e.target.value)} 
-                  style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--neutral-400)', fontSize: '0.875rem', outline: 'none', background: 'var(--neutral-100)' }}
-                >
-                  <option value="">Select Doctor</option>
-                  {(boardData?.departments?.find((d: any) => d.id === overrideDeptId)?.rooms || []).map((r: any) => (
-                    r.doctor_id ? <option key={r.doctor_id} value={r.doctor_id}>{r.doctor_name}</option> : null
+            {/* Scrollable Content */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+              
+              {/* Error Message */}
+              {overrideErrors.submit && (
+                <div style={{ background: '#fee2e2', border: '1px solid #fecaca', color: '#991b1b', padding: '1rem', borderRadius: '8px', fontSize: '0.875rem', fontWeight: 600 }}>
+                  {overrideErrors.submit}
+                </div>
+              )}
+
+              {/* Urgency Level */}
+              <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Urgency Level</label>
+                <div style={{ display: 'flex', gap: '1rem' }}>
+                  {[1, 2, 3].map(level => (
+                    <button 
+                      key={level}
+                      onClick={() => setOverrideLevel(level)}
+                      style={{ 
+                        flex: 1, 
+                        padding: '0.75rem', 
+                        borderRadius: '8px', 
+                        border: overrideLevel === level ? `2px solid ${level === 1 ? '#ba1a1a' : level === 2 ? 'var(--secondary)' : 'var(--primary)'}` : '1px solid var(--neutral-400)',
+                        background: overrideLevel === level ? (level === 1 ? '#ffdad6' : level === 2 ? '#e0f2fe' : '#dbeafe') : 'white',
+                        color: overrideLevel === level ? (level === 1 ? '#ba1a1a' : level === 2 ? 'var(--secondary)' : 'var(--primary)') : 'var(--text-muted)',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        transition: 'all 0.2s',
+                        fontSize: '0.875rem'
+                      }}
+                    >
+                      L{level}
+                    </button>
                   ))}
-                </select>
+                </div>
+              </div>
+
+              {/* Diagnosis */}
+              <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Diagnosis</label>
+                <input 
+                  type="text" 
+                  value={overrideDiagnosis} 
+                  onChange={e => setOverrideDiagnosis(e.target.value)}
+                  placeholder="Clinical diagnosis..."
+                  style={{ width: '100%', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid var(--neutral-400)', fontSize: '1rem', outline: 'none', background: 'var(--neutral-100)' }}
+                />
+              </div>
+
+              {/* Vitals Section */}
+              <div style={{ borderTop: '1px solid var(--neutral-400)', paddingTop: '1rem' }}>
+                <h3 style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '1rem' }}>Triage Vitals</h3>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Blood Pressure</label>
+                    <input 
+                      type="text" 
+                      value={overrideBP} 
+                      onChange={e => setOverrideBP(e.target.value)}
+                      placeholder="e.g., 120/80"
+                      style={{ width: '100%', padding: '0.6rem 0.8rem', borderRadius: '6px', border: '1px solid var(--neutral-400)', fontSize: '0.875rem', outline: 'none', background: 'var(--neutral-100)' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Heart Rate</label>
+                    <input 
+                      type="text" 
+                      value={overrideHR} 
+                      onChange={e => setOverrideHR(e.target.value)}
+                      placeholder="e.g., 72 bpm"
+                      style={{ width: '100%', padding: '0.6rem 0.8rem', borderRadius: '6px', border: '1px solid var(--neutral-400)', fontSize: '0.875rem', outline: 'none', background: 'var(--neutral-100)' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem' }}>O2 Sat</label>
+                    <input 
+                      type="text" 
+                      value={overrideO2} 
+                      onChange={e => setOverrideO2(e.target.value)}
+                      placeholder="e.g., 98%"
+                      style={{ width: '100%', padding: '0.6rem 0.8rem', borderRadius: '6px', border: '1px solid var(--neutral-400)', fontSize: '0.875rem', outline: 'none', background: 'var(--neutral-100)' }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Department & Doctor */}
+              <div style={{ borderTop: '1px solid var(--neutral-400)', paddingTop: '1rem' }}>
+                <h3 style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '1rem' }}>Assignment</h3>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Department</label>
+                    <select 
+                      value={overrideDeptId} 
+                      onChange={(e) => {
+                        setOverrideDeptId(e.target.value);
+                        // Filter doctors by selected department
+                        const filtered = allDoctors.filter((d: any) => d.department_id === e.target.value);
+                        setFilteredDoctors(filtered);
+                        setOverrideDocId("");
+                      }}
+                      style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--neutral-400)', fontSize: '0.875rem', outline: 'none', background: 'var(--neutral-100)' }}
+                    >
+                      <option value="">Select Department</option>
+                      {(boardData?.departments || []).map((d: any) => (
+                        <option key={d.id} value={d.id}>{d.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Doctor</label>
+                    <select 
+                      value={overrideDocId} 
+                      onChange={(e) => {
+                        setOverrideDocId(e.target.value);
+                        // Auto-select department when doctor is selected
+                        const selectedDoctor = allDoctors.find((d: any) => d.id === e.target.value);
+                        if (selectedDoctor && selectedDoctor.department_id) {
+                          setOverrideDeptId(selectedDoctor.department_id);
+                        }
+                      }}
+                      style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--neutral-400)', fontSize: '0.875rem', outline: 'none', background: 'var(--neutral-100)' }}
+                    >
+                      <option value="">Select Doctor</option>
+                      {filteredDoctors.map((d: any) => (
+                        <option key={d.id} value={d.id}>{d.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: '1rem' }}>
-              <button className="btn-secondary" onClick={() => setShowOverrideModal(false)} style={{ flex: 1, padding: '0.75rem', background: 'var(--neutral-200)', border: 'none', fontWeight: 700, fontSize: '1rem' }}>Cancel</button>
-              <button className="btn-primary" onClick={handleOverrideSubmit} style={{ flex: 2, padding: '0.75rem', fontWeight: 700, fontSize: '1rem' }}>Save Override</button>
+            {/* Footer Buttons */}
+            <div style={{ padding: '1.5rem 2rem', borderTop: '1px solid var(--neutral-400)', display: 'flex', gap: '1rem' }}>
+              <button 
+                className="btn-secondary" 
+                onClick={() => setShowOverrideModal(false)}
+                style={{ flex: 1, padding: '0.75rem', background: 'var(--neutral-200)', border: 'none', fontWeight: 700 }}
+              >
+                Cancel
+              </button>
+              <button 
+                className="btn-primary" 
+                onClick={handleOverrideSubmit}
+                style={{ flex: 2, padding: '0.75rem', fontWeight: 700 }}
+              >
+                Save Changes
+              </button>
             </div>
           </div>
         </div>

@@ -61,28 +61,42 @@ class CareFlowService:
                     pass
 
             triage_res = s.get("triage_result", {}) or {}
+            metadata = p.get("metadata_data", {}) or {}
 
             patient_list.append({
                 "id": str(s["id"]),
+                "patient_id": str(p.get("id", "")),
                 "time": time_str,
                 "level": level,
                 "initials": "".join([n[0] for n in p.get("full_name", "??").split() if n]),
                 "name": p.get("full_name", "Unknown"),
                 "details": f"{p.get('phone', '')} • MRN: {str(p.get('id', ''))[:4].upper()}",
-                "complaint": triage_res.get("summary", "No summary"),
+                "complaint": metadata.get("complaint") or triage_res.get("summary", "No summary"),
                 "diagnosis": triage_res.get("preliminary_diagnosis", "Pending"),
                 "department": dept_name,
                 "assigned_doctor": doc_name,
                 "ai_reasoning": triage_res.get("reasoning", "Awaiting AI analysis..."),
                 "status": s.get("status"),
-                "status_color": "danger" if level == 1 else "warning" if level == 2 else "neutral"
+                "status_color": "danger" if level == 1 else "warning" if level == 2 else "neutral",
+                "metadata_data": metadata,
+                "email": p.get("email", ""),
+                "phone": p.get("phone", ""),
+                "ic_number": p.get("ic_number", "")
             })
+
+        # Find active encounter (patient with "In Consult" status)
+        active = None
+        for p in patient_list:
+            if p.get("status") == "In Consult":
+                active = p
+                break
 
         return {
             "critical": critical_count,
             "queue_active": len(patient_list),
             "avg_wait": "15m",
-            "patients": patient_list
+            "patients": patient_list,
+            "active_encounter": active
         }
 
     @staticmethod
@@ -168,6 +182,19 @@ class CareFlowService:
                 })
 
             dept_docs_count = sum(1 for doc in all_docs if doc.get("department_id") == dept["id"])
+            # Find doctors for this department and their assigned rooms
+            dept_doctors = [
+                {
+                    "id": str(doc["id"]),
+                    "full_name": doc["full_name"],
+                    "room_id": next(
+                        (r["id"] for r in dept.get("rooms", []) if r.get("doctor_id") == doc["id"]),
+                        None
+                    )
+                }
+                for doc in all_docs
+                if doc.get("department_id") == dept["id"]
+            ]
             out_depts.append({
                 "id": str(dept["id"]),
                 "name": dept.get("name"),
@@ -180,7 +207,8 @@ class CareFlowService:
                     "doctors_total": dept_docs_count,
                     "doctors_in_consult": sum(1 for ro in rooms_out if ro["in_consult"])
                 },
-                "rooms": rooms_out
+                "rooms": rooms_out,
+                "doctors": dept_doctors 
             })
 
         # Build doctor catalog from already-fetched data (no extra queries)
@@ -205,64 +233,122 @@ class CareFlowService:
 
     @staticmethod
     async def override_patient(db: AsyncSession, session_id: uuid.UUID, data: dict):
-        """Update a specific triage session."""
-        update_data = {}
-        if "level" in data: update_data["urgency_level"] = f"P{data['level']}"
-        if "department_id" in data: update_data["department_id"] = data["department_id"]
-        if "doctor_id" in data: update_data["doctor_id"] = data["doctor_id"]
-        if "status" in data: update_data["status"] = data["status"]
+        """Update a specific triage session via REST API."""
+        try:
+            update_data = {}
+            if "level" in data: update_data["urgency_level"] = f"P{data['level']}"
+            if "department_id" in data: update_data["department_id"] = data["department_id"]
+            if "doctor_id" in data: update_data["doctor_id"] = data["doctor_id"]
+            if "status" in data: update_data["status"] = data["status"]
 
-        if update_data:
-            stmt = update(TriageSession).where(TriageSession.id == session_id).values(**update_data)
-            await db.execute(stmt)
-            await db.commit()
-            return True
-        return False
+            if update_data:
+                result = await supabase_rest.update_table("sessions", str(session_id), update_data)
+                return result is not None
+            return False
+        except Exception as e:
+            print(f"ERROR in override_patient: {e}")
+            return False
 
     @staticmethod
     async def add_department(db: AsyncSession, hospital_id: uuid.UUID, name: str, specialty_code: str = ""):
-        dept = Department(hospital_id=hospital_id, name=name, specialty_code=specialty_code)
-        db.add(dept)
-        await db.commit()
-        await db.refresh(dept)
-        return dept
+        """Create a new department via REST API."""
+        try:
+            result = await supabase_rest.insert_table("departments", {
+                "hospital_id": str(hospital_id),
+                "name": name,
+                "specialty_code": specialty_code
+            })
+            if result:
+                return result
+            return None
+        except Exception as e:
+            print(f"ERROR in add_department: {e}")
+            return None
 
+    # @staticmethod
+    # async def add_doctor(db: AsyncSession, hospital_id: uuid.UUID, department_id: uuid.UUID, name: str, room_id: Optional[uuid.UUID] = None):
+    #     """Create a new doctor via REST API."""
+    #     try:
+    #         doc_result = await supabase_rest.insert_table("doctors", {
+    #             "hospital_id": str(hospital_id),
+    #             "department_id": str(department_id),
+    #             "full_name": name
+    #         })
+    #         if not doc_result:
+    #             return None
+            
+    #         # Assign to room if provided
+    #         if room_id and doc_result.get("id"):
+    #             await supabase_rest.update_table("rooms", str(room_id), {
+    #                 "doctor_id": doc_result["id"]
+    #             })
+            
+    #         return doc_result
+    #     except Exception as e:
+    #         print(f"ERROR in add_doctor: {e}")
+    #         return None
     @staticmethod
-    async def add_doctor(db: AsyncSession, hospital_id: uuid.UUID, department_id: uuid.UUID, name: str, room_id: Optional[uuid.UUID] = None):
-        doc = Doctor(hospital_id=hospital_id, department_id=department_id, full_name=name)
-        db.add(doc)
-        await db.flush()  # get doc.id without committing
-
-        if room_id:
-            # Assign doctor to room in same transaction
-            await db.execute(
-                update(Room)
-                .where(Room.id == room_id)
-                .values(doctor_id=doc.id)
-            )
-
-        await db.commit()
-        await db.refresh(doc)
-        return doc
+    async def add_doctor(
+        db: AsyncSession, 
+        hospital_id: uuid.UUID, 
+        department_id: uuid.UUID, 
+        name: str, 
+        room_id: Optional[uuid.UUID] = None,
+        specialty: Optional[str] = None  # Add this parameter
+    ):
+        """Create a new doctor via REST API."""
+        try:
+            # Include specialty directly in the insert payload
+            doc_result = await supabase_rest.insert_table("doctors", {
+                "hospital_id": str(hospital_id),
+                "department_id": str(department_id),
+                "full_name": name,
+                "specialty": specialty  # Now stored correctly
+            })
+            
+            if not doc_result:
+                return None
+                
+            # SAFETY UNWRAP: Supabase often returns a list [doc] for inserts
+            doc = doc_result[0] if isinstance(doc_result, list) else doc_result
+            
+            # Assign to room if provided
+            if room_id and doc.get("id"):
+                await supabase_rest.update_table("rooms", str(room_id), {
+                    "doctor_id": doc["id"]
+                })
+            
+            return doc
+        except Exception as e:
+            print(f"ERROR in add_doctor: {e}")
+            return None
 
     @staticmethod
     async def assign_doctor_to_room(db: AsyncSession, room_id: uuid.UUID, doctor_id: Optional[uuid.UUID]):
-        """Assign or unassign a doctor from a room."""
-        await db.execute(
-            update(Room)
-            .where(Room.id == room_id)
-            .values(doctor_id=doctor_id)
-        )
-        await db.commit()
-        return True
+        """Assign or unassign a doctor from a room via REST API."""
+        try:
+            result = await supabase_rest.update_table("rooms", str(room_id), {
+                "doctor_id": str(doctor_id) if doctor_id else None
+            })
+            return result is not None
+        except Exception as e:
+            print(f"ERROR in assign_doctor_to_room: {e}")
+            return False
 
     @staticmethod
     async def add_room(db: AsyncSession, dept_id: uuid.UUID, label: str):
-        room = Room(department_id=dept_id, label=label)
-        db.add(room)
-        await db.commit()
-        await db.refresh(room)
-        return room
+        """Create a new room via REST API."""
+        try:
+            result = await supabase_rest.insert_table("rooms", {
+                "department_id": str(dept_id),
+                "label": label
+            })
+            if result:
+                return result
+            return None
+        except Exception as e:
+            print(f"ERROR in add_room: {e}")
+            return None
 
     @staticmethod
     async def simulate_patient(db: AsyncSession, hospital_id: uuid.UUID, name: str, complaint: str, level: int):
@@ -320,3 +406,116 @@ class CareFlowService:
         await db.execute(stmt)
         await db.commit()
         return True
+
+    @staticmethod
+    async def register_patient(db: AsyncSession, hospital_id: uuid.UUID, name: str, ic_number: str, phone: str, email: str, complaint: str, level: int):
+        """Register a new patient and add to queue via REST API."""
+        try:
+            # Create patient via Supabase REST API
+            patient_data = {
+                "full_name": name,
+                "ic_number": ic_number,
+                "phone": phone,
+                "email": email,
+                "language_preference": "en",
+                "metadata_data": {"complaint": complaint, "level": level}
+            }
+            patient_result = await supabase_rest.insert_table("patients", patient_data)
+            if not patient_result:
+                raise Exception("Failed to create patient in database")
+            
+            # Extract patient ID from result
+            patient_id = patient_result[0]["id"] if isinstance(patient_result, list) else patient_result.get("id")
+            
+            # Create session (add to queue) via REST API
+            session_data = {
+                "hospital_id": str(hospital_id),
+                "patient_id": patient_id,
+                "status": "waiting",
+                "urgency_level": f"P{level}",
+                "triage_result": {
+                    "summary": complaint,
+                    "urgency_level": f"P{level}",
+                    "preliminary_diagnosis": "Pending evaluation"
+                }
+            }
+            await supabase_rest.insert_table("sessions", session_data)
+            
+            # Return patient object with ID
+            patient = type('Patient', (), {'id': patient_id, 'full_name': name})()
+            return patient
+        except Exception as e:
+            print(f"ERROR in register_patient: {e}")
+            raise
+
+    @staticmethod
+    async def search_patients(db: AsyncSession, hospital_id: uuid.UUID, query: str):
+        """Search patients by name. Hospital filtering is done via Session relationship."""
+        stmt = select(Patient).where(
+            Patient.full_name.ilike(f"%{query}%")
+        ).limit(10)
+        result = await db.execute(stmt)
+        return result.scalars().all()
+
+    @staticmethod
+    async def get_doctors_by_hospital(db: AsyncSession, hospital_id: uuid.UUID):
+        """Get all doctors for a hospital."""
+        stmt = select(Doctor).where(Doctor.hospital_id == hospital_id)
+        result = await db.execute(stmt)
+        return result.scalars().all()
+
+    # @staticmethod
+    # async def get_doctors_by_department(db: AsyncSession, department_id: uuid.UUID):
+    #     """Get doctors for a specific department."""
+    #     stmt = select(Doctor).where(Doctor.department_id == department_id)
+    #     result = await db.execute(stmt)
+    #     return result.scalars().all()
+    
+    @staticmethod
+    async def get_doctors_by_department(db: AsyncSession, department_id: uuid.UUID):
+        try:
+            doctors = await supabase_rest.query_table(
+                "doctors",
+                {"department_id": str(department_id)}
+            )
+
+            for doc in doctors:
+                rooms = await supabase_rest.query_table(
+                    "rooms",
+                    {"doctor_id": doc["id"]}
+                )
+                doc["room_id"] = rooms[0]["id"] if rooms else None
+
+            return doctors
+
+        except Exception as e:
+            print(f"Error: {e}")
+            return []
+
+    @staticmethod
+    async def update_patient_vitals(db: AsyncSession, patient_id: uuid.UUID, bp: str = None, hr: str = None, o2: str = None):
+        """Update patient vital signs via REST API."""
+        try:
+            # Fetch current patient data
+            patient_data = await supabase_rest.query_table("patients", {"id": f"eq.{patient_id}", "select": "*"})
+            if not patient_data or len(patient_data) == 0:
+                return False
+            
+            patient = patient_data[0]
+            metadata = patient.get("metadata_data", {}) or {}
+            
+            # Update vitals
+            if bp:
+                metadata["blood_pressure"] = bp
+            if hr:
+                metadata["heart_rate"] = hr
+            if o2:
+                metadata["oxygen_saturation"] = o2
+            
+            # Update via REST API using PATCH
+            update_data = {"metadata_data": metadata}
+            result = await supabase_rest.update_table("patients", patient_id, update_data)
+            return result is not None
+        except Exception as e:
+            print(f"ERROR in update_patient_vitals: {e}")
+            return False
