@@ -179,9 +179,17 @@ class StrategistAgent:
             res = await llm.generate(prompt, cls.SYSTEM_PROMPT, response_format="json", model=cls.MODEL, provider=provider)
             return json.loads(res, strict=False)
         except Exception as e:
-
             print(f"DEBUG: Agent 2 (Strategist) failed: {e}")
-            return {"urgency": "P2", "specialist": depts_to_use[0], "confidence": 0.3, "reasoning": "1. [Error] System timeout.\n2. [Fallback] Safety default."}
+            fallback_specialist = "General Medicine"
+            if fallback_specialist not in depts_to_use:
+                fallback_specialist = depts_to_use[0] if depts_to_use else "General Medicine"
+                
+            return {
+                "urgency": "P3", 
+                "specialist": fallback_specialist, 
+                "confidence": 0.1, 
+                "reasoning": "1. [Error] System timeout or invalid response.\n2. [Fallback] Safety default to General Medicine for evaluation."
+            }
 
 class CriticAgent:
     """Agent 3: Senior Medical Grounder (Practical Error Check)"""

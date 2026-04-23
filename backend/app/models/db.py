@@ -35,17 +35,19 @@ AsyncSessionLocal = async_sessionmaker(
 # ---------------------------------------------------------------------------
 # ORM Models
 # ---------------------------------------------------------------------------
-APPOINTMENT_STATUS_SCHEDULED = "Scheduled"
-APPOINTMENT_STATUS_COMPLETED = "Completed"
+APPOINTMENT_STATUS_SCHEDULED = "Upcoming"
+APPOINTMENT_STATUS_COMPLETED = "Past"
 APPOINTMENT_STATUS_CANCELLED = "Cancelled"
 APPOINTMENT_STATUS_NO_SHOW = "No-show"
 APPOINTMENT_STATUS_RESCHEDULED = "Rescheduled"
+APPOINTMENT_STATUS_CURRENT = "Current"
 APPOINTMENT_STATUS_VALUES = (
     APPOINTMENT_STATUS_SCHEDULED,
     APPOINTMENT_STATUS_COMPLETED,
     APPOINTMENT_STATUS_CANCELLED,
     APPOINTMENT_STATUS_NO_SHOW,
     APPOINTMENT_STATUS_RESCHEDULED,
+    APPOINTMENT_STATUS_CURRENT,
 )
 
 
