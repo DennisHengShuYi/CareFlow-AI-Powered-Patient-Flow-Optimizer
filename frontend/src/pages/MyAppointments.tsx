@@ -21,6 +21,7 @@ import { CaseCard, type StandardCase, type CaseStatusType } from '../components/
 import type { StandardAppointment, AppointmentStatus } from '../components/AppointmentCard';
 
 interface MedicalCase {
+  claim_status: string;
   rejection_reason: string;
   total_bill: number;
   id: string;
@@ -349,9 +350,9 @@ export default function MyAppointments() {
                         workflow_status: c.workflow_status,
                         gl_status: (gl?.status ?? 'none') as CaseStatusType,
                         claim_status: (claim?.status ?? 'none') as CaseStatusType,
-                        rejection_reason: c.rejection_reason,
+                        rejection_reason: c.rejection_reason ?? '',
                         totalBill: c.total_bill ?? 0,
-                        created_at: c.created_at
+                        created_at: c.created_at,
                       }}
                       onClick={() => handleSelectCase(c.id)}
                     />

@@ -1206,17 +1206,36 @@ async def get_patient_detail_with_cases(patient_id: str):
 async def get_current_patient_id(user: dict = Depends(verify_clerk_token)):
     clerk_id = user.get("sub")
 
-    async with AsyncSessionLocal() as db:
-        res = await db.execute(
-            text("SELECT id FROM patients WHERE profile_id = :pid LIMIT 1"),
-            {"pid": clerk_id},
-        )
-        row = res.first()
+    res = await supabase_rest.query_table(
+        "patients",
+        {
+            "profile_id": f"eq.{clerk_id}",
+            "select": "id",
+            "limit": 1
+        }
+    )
 
-    if not row:
-        raise HTTPException(status_code=404, detail="Patient not found")
+    if not res:
+        raise HTTPException(404, "Patient not found")
 
-    return row[0]
+    return res[0]["id"]
+
+async def get_current_staff_id(user: dict = Depends(verify_clerk_token)):
+    clerk_id = user.get("sub")
+
+    res = await supabase_rest.query_table(
+        "doctors",
+        {
+            "profile_id": f"eq.{clerk_id}",
+            "select": "id",
+            "limit": 1
+        }
+    )
+
+    if not res:
+        raise HTTPException(404, "Staff not found")
+
+    return res[0]["id"]
     
 @router.get("/api/my/cases")
 async def get_my_cases(user=Depends(verify_clerk_token)):
@@ -1256,6 +1275,7 @@ async def get_my_cases(user=Depends(verify_clerk_token)):
             raise HTTPException(status_code=404, detail="Patient not found")
 
         p = response[0]
+        diagnoses = [c["title"] for c in p.get("medical_cases", [])]
 
         return {
             "cases": [
@@ -1266,12 +1286,17 @@ async def get_my_cases(user=Depends(verify_clerk_token)):
                     "status": c.get("status"),
                     "workflow_status": c.get("workflow_status"),
                     "created_at": c.get("created_at"),
+                    "insurers": p.get("insurers"),
 
                     "gl": c.get("gl"),
                     "claim": c.get("claims"),
                 }
                 for c in p.get("medical_cases", [])
-            ]
+            ],
+            "age": p.get("age"),
+            "diagnoses": diagnoses,
+            "insurers": p.get("insurers"),
+
         }
 
     except Exception as e:
@@ -1286,40 +1311,49 @@ async def get_my_cases(user=Depends(verify_clerk_token)):
 async def get_archived_patients():
     try:
         print("[PATIENTS] Fetching archived patients...")
- 
+
         response = await supabase_rest.query_table(
             "patients",
             {
-                "select": """
-                    id,
-                    full_name,
-                    age,
-                    category,
-                    insurers,
-                    diagnoses,
-                    medical_cases (
-                        id,
-                        title,
-                        department,
-                        status,
-                        workflow_status,
-                        has_medical_bill,
-                        created_at
-                    )
-                """,
+                "select": "id, full_name, age, category, status, insurers, medical_cases(*)",
                 "status": "eq.archived",
                 "order": "created_at.desc"
             }
         )
- 
-        print(f"[PATIENTS] Archived success. Count = {len(response)}")
- 
+
+        patients = []
+        for p in response:
+            cases = [
+                {
+                    "id": c.get("id"),
+                    "title": c.get("title"),
+                    "department": c.get("department"),
+                    "status": c.get("status"),
+                    "workflow_status": c.get("workflow_status"),
+                    "rejection_reason": c.get("rejection_reason"),
+                    "created_at": c.get("created_at")
+                }
+                for c in (p.get("medical_cases") or [])
+            ]
+
+            patients.append({
+                "id": p.get("id"),
+                "full_name": p.get("full_name"),
+                "age": p.get("age"),
+                "category": p.get("category"),
+                "insurers": p.get("insurers") or [],
+                "diagnoses": [c["title"] for c in cases],
+                "cases": cases
+            })
+
+        print(f"[PATIENTS] Archived success. Count = {len(patients)}")
+
         return {
             "success": True,
-            "count": len(response),
-            "data": response
+            "count": len(patients),
+            "data": patients
         }
- 
+
     except Exception as e:
         print(f"[PATIENTS] ARCHIVED ERROR: {str(e)}")
         raise HTTPException(
@@ -1501,3 +1535,108 @@ async def update_status(case_id: str, type: str, status: str):
                 {"gl_id": new_gl_id},
                 {"id": f"eq.{case_id}"}
             )
+
+@router.delete("/cases/{case_id}/status")
+async def withdraw_gl(case_id: str, patient_id: str = Depends(get_current_patient_id)):
+    # 1. get GL id
+    res = await supabase_rest.query_table(
+        "medical_cases",
+        {
+            "select": "gl_id",
+            "id": f"eq.{case_id}",
+            "patient_id": f"eq.{patient_id}"
+        }
+    )
+
+    if not res or not res[0].get("gl_id"):
+        return {"message": "No GL record to withdraw"}
+
+    gl_id = res[0]["gl_id"]
+
+    # 2. unlink from medical_cases
+    await supabase_rest.update_table(
+        "medical_cases",
+        {"gl_id": None},
+        {"id": f"eq.{case_id}"}
+    )
+
+    # 3. delete GL row
+    await supabase_rest.delete_table(
+        "gl",
+        {"id": f"eq.{gl_id}"}
+    )
+
+    return {"status": "none", "message": "GL record withdrawn successfully"}
+
+# ---------------------------------------------------------------------------
+# GET /me/role  — returns the current user's role from profiles table
+# ---------------------------------------------------------------------------
+@router.get("/me/role")
+async def get_my_role(user: dict = Depends(verify_clerk_token)):
+    clerk_id = user.get("sub")
+ 
+    res = await supabase_rest.query_table(
+        "profiles",
+        {
+            "select": "role",
+            "id": f"eq.{clerk_id}"   # profiles.id = Clerk sub
+        }
+    )
+ 
+    if not res:
+        raise HTTPException(404, "Profile not found")
+ 
+    return {"role": res[0].get("role")}
+ 
+ 
+# ---------------------------------------------------------------------------
+# PATCH /cases/{case_id}/reject  — hospital staff rejects GL or Claim
+# Sets status=rejected and writes rejection_reason
+# ---------------------------------------------------------------------------
+@router.patch("/cases/{case_id}/reject")
+async def reject_status(
+    case_id: str,
+    type: str,
+    reason: str,
+    user: dict = Depends(verify_clerk_token),
+):
+    if type not in ["gl", "claim"]:
+        raise HTTPException(400, "Invalid type. Must be 'gl' or 'claim'")
+ 
+    # 1. Get FK ids from medical_cases
+    case_res = await supabase_rest.query_table(
+        "medical_cases",
+        {
+            "select": "gl_id,claims_id",
+            "id": f"eq.{case_id}"
+        }
+    )
+ 
+    if not case_res:
+        raise HTTPException(404, "Case not found")
+ 
+    case = case_res[0]
+ 
+    if type == "gl":
+        record_id = case.get("gl_id")
+        if not record_id:
+            raise HTTPException(404, "No GL record found for this case")
+ 
+        await supabase_rest.update_table(
+            "gl",
+            {"status": "rejected", "rejection_reason": reason},
+            {"id": f"eq.{record_id}"}
+        )
+        return {"status": "rejected", "message": "GL rejected"}
+ 
+    else:  # claim
+        record_id = case.get("claims_id")
+        if not record_id:
+            raise HTTPException(404, "No Claim record found for this case")
+ 
+        await supabase_rest.update_table(
+            "claims",
+            {"status": "rejected", "rejection_reason": reason},
+            {"id": f"eq.{record_id}"}
+        )
+        return {"status": "rejected", "message": "Claim rejected"}

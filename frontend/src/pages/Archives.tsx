@@ -6,32 +6,34 @@ import {
   ChevronRight,
   Search,
   CreditCard,
-  Activity,
   FileCheck,
   Clock,
   Loader2,
-  ChevronLeft
+  ChevronLeft,
+  Users
 } from 'lucide-react';
-import { CaseCard, type CaseStatusType } from '../components/CaseCard';
+import { CaseCard, type StandardCase, type CaseStatusType } from '../components/CaseCard';
 import { AppointmentCard, type StandardAppointment } from '../components/AppointmentCard';
 
+// ── Types ──────────────────────────────────────────────────────────────────
+
 interface ArchivedCase {
-  rejection_reason: string;
   id: string;
   title: string;
   department: string;
   status: string;
   workflowStatus: string;
   createdAt: string;
+  rejection_reason: string;
 }
 
 interface ArchivedPatient {
   id: string;
   name: string;
   age: number;
-  category: string;
-  insurers: string[];
+  caseCount: number;
   diagnoses: string[];
+  insurers: string[];
   cases: ArchivedCase[];
 }
 
@@ -52,9 +54,7 @@ interface Appointment {
 
 const API = 'http://127.0.0.1:8002';
 
-// Remove local normaliseStatus as it is in CaseCard/AppointmentCard helper imports if needed
-// Actually CaseCard doesn't export normaliseStatus, but we can inline it or export it.
-// I'll just use the logic in CaseCard.
+// ── Data Fetching ──────────────────────────────────────────────────────────
 
 const fetchArchivedPatients = async (): Promise<ArchivedPatient[]> => {
   const token = localStorage.getItem('token');
@@ -65,12 +65,10 @@ const fetchArchivedPatients = async (): Promise<ArchivedPatient[]> => {
   if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 
   const json = await response.json();
-  const rawData: any[] = json.data || json;
-
-  if (!Array.isArray(rawData)) throw new Error('Data is not an array');
+  const rawData: any[] = json.data || [];
 
   return rawData.map((p: any): ArchivedPatient => {
-    const cases: ArchivedCase[] = (p.medical_cases || []).map((c: any): ArchivedCase => ({
+    const cases: ArchivedCase[] = (p.cases || []).map((c: any): ArchivedCase => ({
       id: String(c.id || ''),
       title: c.title ?? 'Untitled Case',
       department: c.department ?? 'General',
@@ -84,13 +82,15 @@ const fetchArchivedPatients = async (): Promise<ArchivedPatient[]> => {
       id: String(p.id || ''),
       name: p.full_name || 'Anonymous Patient',
       age: p.age ?? 0,
-      category: p.category || 'outpatient',
+      caseCount: cases.length,
       insurers: p.insurers ?? [],
       diagnoses: p.diagnoses ?? cases.map(c => c.title),
       cases
     };
   });
 };
+
+// ── Main Component ─────────────────────────────────────────────────────────
 
 export default function Archives() {
   const navigate = useNavigate();
@@ -144,8 +144,6 @@ export default function Archives() {
     p.id.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // Remove local renderWorkflowStatus as it is now in CaseCard.tsx
-
   return (
     <LayoutSidebar>
       <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
@@ -156,10 +154,7 @@ export default function Archives() {
           display: 'flex', flexDirection: 'column', backgroundColor: 'var(--neutral-100)'
         }}>
           <div style={{ padding: '2rem 1.5rem', borderBottom: '1px solid var(--neutral-400)' }}>
-            <h1 style={{ fontSize: '1.75rem', fontWeight: 800, marginBottom: '0.25rem' }}>Archives</h1>
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
-              Historical patient records
-            </p>
+            <h1 style={{ fontSize: '1.75rem', fontWeight: 800, marginBottom: '1.5rem' }}>Archives</h1>
             <div style={{ position: 'relative' }}>
               <Search
                 size={18}
@@ -184,70 +179,56 @@ export default function Archives() {
 
           <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem' }}>
             {loading ? (
-              <div style={{ textAlign: 'center', color: 'var(--text-muted)', paddingTop: '2rem' }}>
-                <Loader2 size={24} style={{ margin: '0 auto 0.75rem', display: 'block' }} />
-                <span style={{ fontSize: '0.875rem' }}>Loading records...</span>
+              <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.875rem', paddingTop: '2rem' }}>
+                <Loader2 size={24} className="animate-spin" style={{ margin: '0 auto 0.75rem', display: 'block', opacity: 0.5 }} />
+                Loading records...
               </div>
             ) : filteredPatients.length === 0 ? (
               <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.875rem', paddingTop: '2rem' }}>
                 No archived patients found.
               </div>
             ) : (
-              <>
-                <h3 style={{
-                  fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.1em',
-                  color: 'var(--text-muted)', marginBottom: '1rem',
-                  display: 'flex', alignItems: 'center', gap: '0.5rem'
-                }}>
-                  Archived Patients
-                  <span style={{
-                    backgroundColor: 'var(--neutral-400)', padding: '2px 6px',
-                    borderRadius: '4px', fontSize: '0.65rem'
-                  }}>
-                    {filteredPatients.length}
-                  </span>
-                </h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                  {filteredPatients.map(p => (
-                    <div
-                      key={p.id}
-                      style={{
-                        padding: '1rem', borderRadius: '12px',
-                        backgroundColor: selectedPatientId === p.id ? 'var(--primary-fixed)' : 'white',
-                        border: selectedPatientId === p.id
-                          ? '1px solid var(--primary)'
-                          : '1px solid var(--neutral-400)',
-                        transition: 'all 0.2s ease',
-                        display: 'flex', justifyContent: 'space-between', alignItems: 'center'
-                      }}
-                    >
-                      <div>
-                        <button
-                          onClick={() => setSelectedPatientId(p.id)}
-                          style={{
-                            fontWeight: 700,
-                            color: selectedPatientId === p.id ? 'var(--primary)' : 'var(--text-main)',
-                            marginBottom: '0.25rem', textAlign: 'left',
-                            padding: 0, background: 'none', border: 'none',
-                            fontSize: '1rem', cursor: 'pointer'
-                          }}
-                        >
-                          {p.name}
-                        </button>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', gap: '0.75rem' }}>
-                          <span>{p.age} years old</span>
-                          <span>•</span>
-                          <span>{p.cases.length} case{p.cases.length !== 1 ? 's' : ''}</span>
-                        </div>
+              // ── Flat list, no category grouping ──
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                {filteredPatients.map(p => (
+                  <div
+                    key={p.id}
+                    onClick={() => {
+                      setSelectedPatientId(p.id);
+                      setSelectedCaseId(null);
+                    }}
+                    style={{
+                      padding: '1rem', borderRadius: '12px',
+                      backgroundColor: selectedPatientId === p.id ? 'var(--primary-fixed)' : 'white',
+                      border: selectedPatientId === p.id
+                        ? '1px solid var(--primary)'
+                        : '1px solid var(--neutral-400)',
+                      transition: 'all 0.2s ease',
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <div>
+                      <div style={{
+                        fontWeight: 700,
+                        color: selectedPatientId === p.id ? 'var(--primary)' : 'var(--text-main)',
+                        marginBottom: '0.25rem', fontSize: '1rem'
+                      }}>
+                        {p.name}
                       </div>
-                      <ChevronRight
-                        size={16}
-                        color={selectedPatientId === p.id ? 'var(--primary)' : 'var(--neutral-500)'}
-                      />
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', gap: '0.75rem' }}>
+                        <span>{p.age} yrs</span>
+                        <span>•</span>
+                        <span>{p.caseCount} case{p.caseCount !== 1 ? 's' : ''}</span>
+                      </div>
                     </div>
-                  ))}
-                </div>
-              </>
+                    <ChevronRight
+                      size={16}
+                      color={selectedPatientId === p.id ? 'var(--primary)' : 'var(--neutral-500)'}
+                    />
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </div>
@@ -268,37 +249,36 @@ export default function Archives() {
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                 position: 'relative', overflow: 'hidden'
               }}>
-                {/* Archived badge watermark */}
                 <Archive
                   size={180}
                   style={{ position: 'absolute', right: '-40px', bottom: '-40px', opacity: 0.1, color: 'white' }}
                 />
                 <div style={{ position: 'relative', zIndex: 1 }}>
                   <div style={{
-                    display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+                    display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
                     padding: '4px 12px', borderRadius: '9999px',
                     backgroundColor: 'rgba(255,255,255,0.2)', fontSize: '0.75rem', fontWeight: 700,
                     textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '1rem'
                   }}>
-                    <Archive size={12} /> Archived • {selectedPatient.category}
+                    <Archive size={12} /> Archived Record
                   </div>
                   <h2 style={{ fontSize: '2.5rem', color: 'white', fontWeight: 800, marginBottom: '0.5rem' }}>
                     {selectedPatient.name}
                   </h2>
                   <div style={{ display: 'flex', gap: '2rem', opacity: 0.9 }}>
                     <div>
-                      <div style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.8, textTransform: 'uppercase' }}>Patient Age</div>
+                      <div style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.8, textTransform: 'uppercase' }}>Age</div>
                       <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{selectedPatient.age} Years</div>
                     </div>
                     <div>
-                      <div style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.8, textTransform: 'uppercase' }}>Total Cases</div>
-                      <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{selectedPatient.cases.length}</div>
+                      <div style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.8, textTransform: 'uppercase' }}>Records</div>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{selectedPatient.caseCount} Cases</div>
                     </div>
                   </div>
                 </div>
                 <div style={{ position: 'relative', zIndex: 1, textAlign: 'right' }}>
                   <div style={{ marginBottom: '1rem' }}>
-                    <div style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.8, textTransform: 'uppercase', marginBottom: '0.5rem' }}>Insurers</div>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.8, textTransform: 'uppercase', marginBottom: '0.5rem' }}>Financial Coverage</div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', justifyContent: 'flex-end' }}>
                       {selectedPatient.insurers.length > 0
                         ? selectedPatient.insurers.map((ins, i) => (
@@ -346,7 +326,8 @@ export default function Archives() {
                         ))
                         : <div style={{
                           backgroundColor: 'var(--neutral-200)', padding: '0.75rem',
-                          borderRadius: '10px', fontSize: '0.875rem', color: 'var(--text-muted)'
+                          borderRadius: '10px', fontSize: '0.875rem', color: 'var(--text-muted)',
+                          fontStyle: 'italic'
                         }}>
                           No diagnoses recorded
                         </div>
@@ -355,7 +336,7 @@ export default function Archives() {
                   </div>
                   <div>
                     <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.75rem', textTransform: 'uppercase' }}>
-                      Financial Coverage
+                      Insurers
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                       {selectedPatient.insurers.length > 0
@@ -370,7 +351,8 @@ export default function Archives() {
                         ))
                         : <div style={{
                           backgroundColor: 'var(--neutral-200)', padding: '0.75rem',
-                          borderRadius: '10px', fontSize: '0.875rem', color: 'var(--text-muted)'
+                          borderRadius: '10px', fontSize: '0.875rem', color: 'var(--text-muted)',
+                          fontStyle: 'italic'
                         }}>
                           No insurers on record
                         </div>
@@ -385,24 +367,36 @@ export default function Archives() {
                     <div>
                       <button
                         onClick={() => setSelectedCaseId(null)}
-                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'none', border: 'none', color: 'var(--primary)', fontWeight: 700, fontSize: '0.95rem', cursor: 'pointer', marginBottom: '1.5rem', padding: 0 }}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: '0.5rem',
+                          background: 'none', border: 'none', color: 'var(--primary)',
+                          fontWeight: 700, fontSize: '0.95rem', cursor: 'pointer',
+                          marginBottom: '1.5rem', padding: '0.5rem 0'
+                        }}
                       >
-                        <ChevronLeft size={18} /> Back to Cases
+                        <ChevronLeft size={18} /> Back to Case Records
                       </button>
 
-                      <h3 style={{ fontSize: '1.25rem', fontWeight: 800, marginBottom: '1rem' }}>Case Appointments</h3>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                        <h3 style={{ fontSize: '1.25rem', fontWeight: 800 }}>Case Appointments</h3>
+                        <div style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-muted)' }}>
+                          {appointments[selectedCaseId]?.length ?? 0} historical events
+                        </div>
+                      </div>
 
                       {loadingApts ? (
                         <div className="card" style={{ padding: '3rem', textAlign: 'center' }}>
-                          <Loader2 size={24} className="animate-spin" color="var(--primary)" style={{ margin: '0 auto' }} />
-                          <div style={{ marginTop: '0.75rem', color: 'var(--text-muted)' }}>Loading appointments...</div>
+                          <Loader2 size={28} className="animate-spin" color="var(--primary)" style={{ margin: '0 auto' }} />
+                          <div style={{ marginTop: '1rem', color: 'var(--text-muted)', fontWeight: 600 }}>Loading appointments...</div>
                         </div>
                       ) : (appointments[selectedCaseId] || []).length === 0 ? (
                         <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-                          No archived appointments found for this case.
+                          <Clock size={40} style={{ opacity: 0.15, marginBottom: '1rem' }} />
+                          <h3 style={{ fontSize: '1.125rem', fontWeight: 700 }}>No appointments found</h3>
+                          <p style={{ marginTop: '0.5rem', fontSize: '0.875rem' }}>No historical events found for this case.</p>
                         </div>
                       ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
                           {(appointments[selectedCaseId] || []).map(apt => (
                             <AppointmentCard
                               key={apt.id}
@@ -428,32 +422,42 @@ export default function Archives() {
                     </div>
                   ) : (
                     <>
-                      <h3 style={{ fontSize: '1.25rem', fontWeight: 800 }}>Medical Cases</h3>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <h3 style={{ fontSize: '1.25rem', fontWeight: 800 }}>Medical Cases</h3>
+                        <div style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-muted)' }}>
+                          {selectedPatient.caseCount} total
+                        </div>
+                      </div>
 
-                      {selectedPatient.cases.length === 0 && (
+                      {selectedPatient.cases.length === 0 ? (
                         <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-                          No cases found for this patient.
+                          <FileCheck size={40} style={{ opacity: 0.15, marginBottom: '1rem' }} />
+                          <h3 style={{ fontSize: '1.125rem', fontWeight: 700 }}>No case history</h3>
+                          <p style={{ marginTop: '0.5rem', fontSize: '0.875rem' }}>This patient has no archived medical cases.</p>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                          {selectedPatient.cases.map((c, i) => (
+                            <CaseCard
+                              key={c.id ?? i}
+                              caseData={{
+                                id: c.id,
+                                title: c.title,
+                                department: c.department,
+                                gl_status: (c.workflowStatus === 'approved' ? 'approved' : c.workflowStatus === 'requested' ? 'requested' : 'none') as CaseStatusType,
+                                claim_status: 'none',
+                                totalBill: 0,
+                                rejection_reason: c.rejection_reason,
+                                created_at: c.createdAt,
+                                status: 'Archived',
+                                workflow_status: c.workflowStatus
+                              }}
+                              onClick={() => handleSelectCase(c.id)}
+                            // showActions={false}  // ← disables GL/claim action buttons
+                            />
+                          ))}
                         </div>
                       )}
-
-                      {selectedPatient.cases.map((c, i) => (
-                        <CaseCard
-                          key={c.id ?? i}
-                          caseData={{
-                            id: c.id,
-                            title: c.title,
-                            department: c.department,
-                            status: 'Archived',
-                            workflow_status: c.workflowStatus,
-                            gl_status: (c.workflowStatus === 'approved' ? 'approved' : c.workflowStatus === 'requested' ? 'requested' : 'none') as CaseStatusType,
-                            claim_status: 'none',
-                            totalBill: 0,
-                            rejection_reason: c.rejection_reason,
-                            created_at: c.createdAt,
-                          }}
-                          onClick={() => handleSelectCase(c.id)}
-                        />
-                      ))}
                     </>
                   )}
                 </div>
@@ -464,8 +468,9 @@ export default function Archives() {
               height: '100%', display: 'flex', flexDirection: 'column',
               alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)'
             }}>
-              <Archive size={64} style={{ opacity: 0.2, marginBottom: '1.5rem' }} />
-              <h3>Select a patient to view their archived records</h3>
+              <Users size={64} style={{ opacity: 0.2, marginBottom: '1.5rem' }} />
+              <h3 style={{ fontSize: '1.25rem', fontWeight: 800 }}>Select a Patient</h3>
+              <p style={{ marginTop: '0.5rem', fontSize: '0.875rem' }}>Browse the archive to view historical patient records</p>
             </div>
           ) : null}
         </div>
