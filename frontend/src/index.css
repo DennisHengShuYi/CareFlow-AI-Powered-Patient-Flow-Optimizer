@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
+﻿@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
 
 :root {
   --primary: #1E88E5;
@@ -697,7 +697,7 @@ a {
   }
 }
 
-/* ── Intake / Patient Page Responsive ─────────────────────── */
+/* â”€â”€ Intake / Patient Page Responsive â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 /* Bottom Navigation Bar (mobile only) */
 .mobile-bottom-nav {
@@ -753,13 +753,13 @@ a {
   .layout-main {
     padding-bottom: 72px;
   }
-  /* Hide the sidebar on mobile — bottom nav takes over */
+  /* Hide the sidebar on mobile â€” bottom nav takes over */
   .sidebar-hide-mobile {
     display: none !important;
   }
 }
 
-/* On tablets (481–768px): icon-only sidebar, no bottom nav */
+/* On tablets (481â€“768px): icon-only sidebar, no bottom nav */
 @media (min-width: 481px) and (max-width: 768px) {
   .mobile-bottom-nav {
     display: none !important;
@@ -771,7 +771,7 @@ a {
   }
 }
 
-/* Intake page — step 1 card */
+/* Intake page â€” step 1 card */
 .intake-card {
   width: 100%;
   max-width: 800px;
@@ -781,7 +781,7 @@ a {
   box-sizing: border-box;
 }
 
-/* Intake page — step 2 triage results card */
+/* Intake page â€” step 2 triage results card */
 .triage-card {
   width: 100%;
   max-width: 1000px;
@@ -883,7 +883,7 @@ a {
   }
 }
 
-/* Language toggle — right aligned but responsive */
+/* Language toggle â€” right aligned but responsive */
 .lang-toggle-row {
   display: flex;
   justify-content: flex-end;
@@ -974,12 +974,12 @@ a {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════
-   MOBILE RESPONSIVE — Intake Triage Results
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   MOBILE RESPONSIVE â€” Intake Triage Results
    Pictures 1 (Summary), 2 (Hospital Cards), 3 (Reasoning)
-   ═══════════════════════════════════════════════════════════ */
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-/* ── "LLM Triage Complete" title + subtitle: center on mobile/tablet ── */
+/* â”€â”€ "LLM Triage Complete" title + subtitle: center on mobile/tablet â”€â”€ */
 @media (max-width: 1024px) {
   .triage-card-title,
   .triage-card-subtitle {
@@ -987,7 +987,7 @@ a {
   }
 }
 
-/* ── Picture 1: AI Triage Summary — center header + cards ── */
+/* â”€â”€ Picture 1: AI Triage Summary â€” center header + cards â”€â”€ */
 @media (max-width: 1024px) {
   /* Stack assessment label, h2, and urgency pill centrally */
   .triage-header-row {
@@ -1021,7 +1021,7 @@ a {
   }
 }
 
-/* ── Picture 2: Hospital Cards — center all inner elements ── */
+/* â”€â”€ Picture 2: Hospital Cards â€” center all inner elements â”€â”€ */
 @media (max-width: 1024px) {
   /* Each hospital card header (#badge + name + specialty badge): stack centrally */
   .hosp-card-header {
@@ -1068,7 +1068,7 @@ a {
   }
 }
 
-/* ── Extra polish at very small screens (< 480px) ── */
+/* â”€â”€ Extra polish at very small screens (< 480px) â”€â”€ */
 @media (max-width: 480px) {
   /* Urgency pill: center when stacked */
   .triage-header-row > div:last-child {
@@ -1077,3 +1077,10 @@ a {
 }
 
 
+@keyframes fadeInUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes scaleUp { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+.slot-chip { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+.slot-chip:hover:not(:disabled) { border-color: var(--primary) !important; box-shadow: 0 4px 12px rgba(30, 136, 229, 0.1); transform: translateY(-2px); }
+.btn-ghost { display: flex; align-items: center; width: 100%; background: transparent; color: var(--text-main); transition: all 0.15s; }
+.btn-ghost:hover { background: var(--neutral-300); color: var(--primary); }
+.shadow-xl { box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04); }

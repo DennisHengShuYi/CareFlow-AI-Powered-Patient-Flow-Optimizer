@@ -20,7 +20,7 @@ from app.auth.clerk import verify_clerk_token
 from app.cache.redis_client import redis_client
 from app.config.llm_provider import llm
 from app.config.settings import settings
-from app.models.db import AsyncSessionLocal, AuditLog, IntakeLog, Session as SessionModel, Profile, Doctor, Room, Hospital, Department, Appointment, Patient
+from app.models.db import AsyncSessionLocal, AuditLog, IntakeLog, Session as SessionModel, Profile, Doctor, Room, Hospital, Department, Appointment, Patient, APPOINTMENT_STATUS_SCHEDULED
 from app.services.booking_engine import booking_engine
 from app.services.intake_pipeline import intake_pipeline
 from app.services.triage_agent import triage_agent
@@ -170,6 +170,7 @@ class BookRequest(BaseModel):
     session_id: str
     patient_id: str | None = None
     provider_id: str | None = None
+    hospital_id: str | None = None
     scheduled_at: str       # ISO 8601
     urgency: str
     complaint: str
@@ -382,8 +383,13 @@ async def intake_text(
         # 4. Multi-Agent Triage Pipeline (Global Discovery)
         print("DEBUG: [Stage 3] Calling Global Multi-Agent Triage...")
         
-        # We now use the Global-to-Local pipeline (decisions are hospital-agnostic initially)
-        pipeline_output = await triage_orchestrator.run_pipeline(raw, language_preference=language_preference)
+        # We now pass 'history' so the AI can remember previous turns (Context-Aware)
+        pipeline_output = await triage_orchestrator.run_pipeline(
+            raw, 
+            language_preference=language_preference,
+            history=history
+        )
+
 
         # Map pipeline output to the frontend expected format
         decision = pipeline_output.get("decision", {})
@@ -432,11 +438,12 @@ async def intake_text(
         lang = result.get("language_detected", "en")
         complete_msg = "Triage selesai" if lang == "ms" else "Triage complete"
         
-        await redis_client.append_turn(session_id, {"role": "user", "content": raw})
+        await redis_client.append_turn(session_id, {"role": "user", "text": raw})
         await redis_client.append_turn(
             session_id,
-            {"role": "agent", "content": follow_up_q or complete_msg},
+            {"role": "assistant", "text": follow_up_q or complete_msg},
         )
+
 
         # 7. Persist session to DB (Wrapped in resilience block)
         print("DEBUG: [Stage 5] Auditing and returning...")
@@ -587,12 +594,20 @@ async def appointment_slots(
     limit: int = 12,
     preferred_window: str = "any",
     auto_expand: bool = True,
+    target_date: str | None = None,
     user: dict = Depends(verify_clerk_token),
 ):
-    slot_limit = max(3, min(limit, 24))
+    slot_limit = max(3, min(limit, 100))
     normalized_window = preferred_window.strip().lower()
     if normalized_window not in {"any", "morning", "afternoon"}:
         normalized_window = "any"
+
+    parsed_date: datetime | None = None
+    if target_date:
+        try:
+            parsed_date = datetime.fromisoformat(target_date.replace('Z', '+00:00'))
+        except ValueError:
+            pass
 
     slots = await booking_engine.get_available_slots(
         specialty,
@@ -600,27 +615,34 @@ async def appointment_slots(
         hospital_id,
         limit=slot_limit,
         preferred_window=normalized_window,
+        target_date=parsed_date,
     )
 
     expanded_from_hospital_filter = False
-    if hospital_id and auto_expand and len(slots) < slot_limit:
+    if hospital_id and auto_expand:
+        # If the primary hospital is busy or has few slots, always try to bring in variety
+        # regardless of whether we hit the initial 'limit'
         extra_slots = await booking_engine.get_available_slots(
             specialty,
             urgency,
             None,
-            limit=slot_limit * 2,
+            limit=24, # Fetch a larger pool for variety
             preferred_window=normalized_window,
+            target_date=parsed_date,
         )
-        seen = {(s.get("doctor_id"), s.get("scheduled_at")) for s in slots}
+        seen = {(s.get("doctor_id"), s.get("hospital_id"), s.get("scheduled_at")) for s in slots}
+        added_count = 0
         for slot in extra_slots:
-            key = (slot.get("doctor_id"), slot.get("scheduled_at"))
+            key = (slot.get("doctor_id"), slot.get("hospital_id"), slot.get("scheduled_at"))
             if key in seen:
                 continue
             slots.append(slot)
             seen.add(key)
-            if len(slots) >= slot_limit:
+            added_count += 1
+            # Allow up to 20 slots total when showing multiple hospitals
+            if len(slots) >= 20:
                 break
-        expanded_from_hospital_filter = len(slots) > 0
+        expanded_from_hospital_filter = added_count > 0
     wait_values = [slot.get("estimated_wait_minutes") for slot in slots if slot.get("estimated_wait_minutes") is not None]
     queue_too_long = not slots or (bool(wait_values) and min(wait_values) >= QUEUE_DIVERSION_THRESHOLD_MINUTES)
 
@@ -652,6 +674,7 @@ async def book_appointment(
             session_id=body.session_id,
             patient_id=body.patient_id,
             provider_id=body.provider_id,
+            hospital_id=body.hospital_id,
             scheduled_at_iso=body.scheduled_at,
             urgency=body.urgency,
             complaint=body.complaint,
@@ -659,20 +682,91 @@ async def book_appointment(
             patient_profile_id=user.get("sub"),
             duration_minutes=body.duration_minutes,
         )
+
+        # ── Room assignment ──────────────────────────────────────────────────
+        # Convert scheduled_at to MYT (UTC+8) and check working hours 08:00-17:00
+        room_label: str | None = None
+        try:
+            from datetime import timedelta
+            MYT_OFFSET = timedelta(hours=8)
+            scheduled_utc = datetime.fromisoformat(body.scheduled_at.replace("Z", "+00:00"))
+            if scheduled_utc.tzinfo is None:
+                scheduled_utc = scheduled_utc.replace(tzinfo=timezone.utc)
+            scheduled_myt = scheduled_utc.astimezone(timezone(MYT_OFFSET))
+            hour_myt = scheduled_myt.hour
+            is_working_hours = 8 <= hour_myt < 17
+
+            if is_working_hours and body.provider_id:
+                async with AsyncSessionLocal() as db:
+                    # Look up the doctor's department
+                    doctor_res = await db.execute(
+                        select(Doctor).where(Doctor.id == uuid.UUID(body.provider_id))
+                    )
+                    doctor = doctor_res.scalar_one_or_none()
+
+                    if doctor and doctor.department_id:
+                        # Find appointment id just created (latest for this patient/session)
+                        appt_res = await db.execute(
+                            text(
+                                "SELECT id FROM appointments "
+                                "WHERE session_id = :sid "
+                                "ORDER BY created_at DESC LIMIT 1"
+                            ),
+                            {"sid": body.session_id},
+                        )
+                        appt_row = appt_res.first()
+
+                        # Get room with lowest usage in the department
+                        room_res = await db.execute(
+                            select(Room)
+                            .where(Room.department_id == doctor.department_id)
+                            .order_by(Room.usage_minutes.asc())
+                            .limit(1)
+                        )
+                        room = room_res.scalar_one_or_none()
+
+                        if room and appt_row:
+                            appt_id = appt_row[0]
+                            # Assign room and increment usage
+                            await db.execute(
+                                text(
+                                    "UPDATE appointments SET room_id = :rid WHERE id = :aid"
+                                ),
+                                {"rid": str(room.id), "aid": str(appt_id)},
+                            )
+                            new_usage = (room.usage_minutes or 0) + (body.duration_minutes or 30)
+                            await db.execute(
+                                text(
+                                    "UPDATE rooms SET usage_minutes = :um WHERE id = :rid"
+                                ),
+                                {"um": new_usage, "rid": str(room.id)},
+                            )
+                            await db.commit()
+                            room_label = room.label
+                            print(f"DEBUG: Assigned room '{room_label}' to appointment {appt_id}")
+        except Exception as room_err:
+            print(f"DEBUG: Room assignment failed (non-fatal): {room_err}")
+        # ────────────────────────────────────────────────────────────────────
+
         latency = int((time.time() - t0) * 1000)
         await _audit(body.session_id, "/appointments/book", body.complaint, latency, 200)
-        return {"status": "confirmed", "fhir_resource": fhir}
+        return {"status": "confirmed", "fhir_resource": fhir, "room_label": room_label}
+    except ValueError as exc:
+        latency = int((time.time() - t0) * 1000)
+        await _audit(body.session_id, "/appointments/book", body.complaint, latency, 409, str(exc))
+        raise HTTPException(status_code=409, detail=str(exc))
     except Exception as exc:
         latency = int((time.time() - t0) * 1000)
         await _audit(body.session_id, "/appointments/book", body.complaint, latency, 500, str(exc))
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+
 @router.get("/appointments/my")
 async def my_appointments(user: dict = Depends(verify_clerk_token)):
     """Return current/upcoming/history appointments for the signed-in patient."""
     clerk_id = user.get("sub") if isinstance(user, dict) else str(user)
-    now = datetime.utcnow().replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
 
     async with AsyncSessionLocal() as db:
         patient_res = await db.execute(
@@ -685,20 +779,21 @@ async def my_appointments(user: dict = Depends(verify_clerk_token)):
         patient_id = patient_row[0]
 
         appt_res = await db.execute(
-            select(Appointment)
+            select(Appointment, Hospital.name)
+            .join(Hospital, Appointment.hospital_id == Hospital.id)
             .where(Appointment.patient_id == patient_id)
             .order_by(Appointment.scheduled_at.desc())
         )
-        appointments = appt_res.scalars().all()
+        appointment_rows = appt_res.all()
 
-        async def enrich(appt: Appointment):
+        async def enrich(appt: Appointment, hosp_name: str):
             people_before = 0
             if appt.doctor_id:
                 queue_res = await db.execute(
                     select(func.count(Appointment.id)).where(
                         and_(
                             Appointment.doctor_id == appt.doctor_id,
-                            Appointment.status == "booked",
+                            Appointment.status == APPOINTMENT_STATUS_SCHEDULED,
                             Appointment.scheduled_at < appt.scheduled_at,
                         )
                     )
@@ -709,15 +804,29 @@ async def my_appointments(user: dict = Depends(verify_clerk_token)):
                     select(func.count(Appointment.id)).where(
                         and_(
                             Appointment.doctor_id.is_(None),
-                            Appointment.status == "booked",
+                            Appointment.status == APPOINTMENT_STATUS_SCHEDULED,
                             Appointment.scheduled_at < appt.scheduled_at,
                         )
                     )
                 )
                 people_before = int(queue_res.scalar() or 0)
 
-            wait_from_time = max(0, int((appt.scheduled_at - now).total_seconds() // 60))
+            appt_at = appt.scheduled_at
+            if appt_at.tzinfo is None:
+                appt_at = appt_at.replace(tzinfo=timezone.utc)
+
+            wait_from_time = max(0, int((appt_at - now).total_seconds() // 60))
             live_wait_minutes = wait_from_time + (people_before * int(appt.duration_minutes or 30))
+
+            # Fetch room label if assigned
+            room_label: str | None = None
+            if appt.room_id:
+                room_res = await db.execute(
+                    select(Room).where(Room.id == appt.room_id)
+                )
+                room = room_res.scalar_one_or_none()
+                if room:
+                    room_label = room.label
 
             return {
                 "id": str(appt.id),
@@ -728,20 +837,22 @@ async def my_appointments(user: dict = Depends(verify_clerk_token)):
                 "status": appt.status,
                 "chief_complaint": appt.chief_complaint,
                 "doctor_id": str(appt.doctor_id) if appt.doctor_id else None,
+                "room_label": room_label,
                 "people_before": people_before,
                 "live_wait_minutes": live_wait_minutes,
+                "hospital_name": hosp_name,
             }
 
-        upcoming_raw = [a for a in appointments if a.scheduled_at >= now and a.status == "booked"]
-        history_raw = [a for a in appointments if a.scheduled_at < now or a.status != "booked"]
+        upcoming_raw = [r for r in appointment_rows if r[0].scheduled_at.replace(tzinfo=timezone.utc if r[0].scheduled_at.tzinfo is None else r[0].scheduled_at.tzinfo) >= now and r[0].status == APPOINTMENT_STATUS_SCHEDULED]
+        history_raw = [r for r in appointment_rows if r[0].scheduled_at.replace(tzinfo=timezone.utc if r[0].scheduled_at.tzinfo is None else r[0].scheduled_at.tzinfo) < now or r[0].status != APPOINTMENT_STATUS_SCHEDULED]
 
         current = None
         if upcoming_raw:
-            nearest = sorted(upcoming_raw, key=lambda a: a.scheduled_at)[0]
-            current = await enrich(nearest)
+            nearest = sorted(upcoming_raw, key=lambda r: r[0].scheduled_at)[0]
+            current = await enrich(nearest[0], nearest[1])
 
-        upcoming = [await enrich(a) for a in sorted(upcoming_raw, key=lambda x: x.scheduled_at)]
-        history = [await enrich(a) for a in history_raw]
+        upcoming = [await enrich(r[0], r[1]) for r in sorted(upcoming_raw, key=lambda x: x[0].scheduled_at)]
+        history = [await enrich(r[0], r[1]) for r in history_raw]
 
         return {
             "current": current,
@@ -923,13 +1034,7 @@ async def recommend_hospitals(
 
     # Prefer nearby hospitals first when location is known.
     NEARBY_RADIUS_KM = 120
-    if user_lat is not None and user_lng is not None:
-        nearby = [c for c in candidates if c["distance_km"] is not None and c["distance_km"] <= NEARBY_RADIUS_KM]
-        if nearby:
-            nearby.sort(key=lambda x: x["distance_km"])
-            return {"recommendations": nearby[:5]}
-
-    # Fallback to global distance sorting if no nearby matches are available.
+    # Return all candidates sorted by distance (nearby first)
     candidates.sort(key=lambda x: (x["distance_km"] if x["distance_km"] is not None else 999999))
     return {"recommendations": candidates[:5]}
 
@@ -950,6 +1055,29 @@ async def nearby_facilities(
         limit=body.limit,
     )
     return {"facilities": facilities}
+
+
+@router.get("/api/departments/all")
+async def get_all_departments():
+    """Fetch all unique department names across all hospitals."""
+    hospitals = await supabase_rest.query_table("hospitals", {
+        "select": "departments(name)",
+        "is_active": "eq.true"
+    })
+    
+    if not hospitals:
+        return {"departments": []}
+    
+    unique_names = set()
+    for h in hospitals:
+        depts = h.get("departments", []) or [] # Ensure it is iterable
+        for d in depts:
+            name = d.get("name")
+            if name:
+                unique_names.add(name)
+                
+    return {"departments": sorted(list(unique_names))}
+
 
 
 async def _get_hospital_id(user_id: str):

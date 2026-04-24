@@ -33,10 +33,11 @@ class LLMProvider:
         if self._openai_client is None:
             from openai import AsyncOpenAI
             import httpx
-            # Use a fresh client to avoid 'proxies' keyword conflicts in some environments
-            http_client = httpx.AsyncClient()
+            # Set a 45s timeout to prevent extreme hangs
+            http_client = httpx.AsyncClient(timeout=45.0)
             self._openai_client = AsyncOpenAI(
                 api_key=settings.OPENAI_API_KEY,
+                base_url=settings.OPENAI_API_BASE if settings.OPENAI_API_BASE else None,
                 http_client=http_client
             )
         return self._openai_client
@@ -45,7 +46,7 @@ class LLMProvider:
         if self._groq_client is None:
             from openai import AsyncOpenAI
             import httpx
-            http_client = httpx.AsyncClient()
+            http_client = httpx.AsyncClient(timeout=30.0)
             self._groq_client = AsyncOpenAI(
                 api_key=settings.GROQ_API_KEY,
                 base_url="https://api.groq.com/openai/v1",
@@ -93,7 +94,17 @@ class LLMProvider:
             payload["response_format"] = {"type": "json_object"}
 
         response = await client.chat.completions.create(**payload)
-        return response.choices[0].message.content
+        content = response.choices[0].message.content or ""
+        
+        # Strip markdown fences if model wraps anyway (common in some OpenAI-compatible APIs)
+        content = content.strip()
+        if content.startswith("```"):
+            import re
+            content = re.sub(r"^```[a-z]*\n?", "", content)
+            content = re.sub(r"\n?```$", "", content)
+            content = content.strip()
+            
+        return content
 
     async def _groq_generate(self, prompt: str, system: str, response_format: str, model: str) -> str:
         client = self._get_groq_client()
@@ -110,7 +121,17 @@ class LLMProvider:
             payload["response_format"] = {"type": "json_object"}
 
         response = await client.chat.completions.create(**payload)
-        return response.choices[0].message.content
+        content = response.choices[0].message.content or ""
+        
+        # Strip markdown fences
+        content = content.strip()
+        if content.startswith("```"):
+            import re
+            content = re.sub(r"^```[a-z]*\n?", "", content)
+            content = re.sub(r"\n?```$", "", content)
+            content = content.strip()
+            
+        return content
 
     async def _gemini_generate(self, prompt: str, system: str, response_format: str, model: str) -> str:
         generation_config = genai.GenerationConfig(
@@ -213,20 +234,22 @@ class LLMProvider:
         )
         return result.tolist()
 
+    def _get_hf_client(self):
+        if not hasattr(self, "_hf_client") or self._hf_client is None:
+            from huggingface_hub import AsyncInferenceClient
+            self._hf_client = AsyncInferenceClient(token=settings.HUGGINGFACE_API_KEY)
+        return self._hf_client
+
     async def _huggingface_embed(self, text: str | list[str]) -> list[float] | list[list[float]]:
         """Generate embeddings using HuggingFace Inference Client."""
         if not settings.HUGGINGFACE_API_KEY:
              raise ValueError("HUGGINGFACE_API_KEY is not set in .env")
 
-        from huggingface_hub import AsyncInferenceClient
-        client = AsyncInferenceClient(token=settings.HUGGINGFACE_API_KEY)
+        client = self._get_hf_client()
         
         try:
             # feature_extraction returns the vector(s)
             result = await client.feature_extraction(text, model=settings.EMBEDDING_MODEL)
-            
-            # If it's a single string, result is [dim1, dim2, ...]
-            # If it's a list of strings, result is [[dim1, ...], [dim1, ...]]
             
             if hasattr(result, "tolist"):
                 return result.tolist()
@@ -235,6 +258,7 @@ class LLMProvider:
         except Exception as e:
             print(f"HuggingFace Client Error: {e}")
             raise
+
 
 
 # Singleton — imported everywhere

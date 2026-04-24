@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, FileText, Building, Calendar, Map, Archive } from 'lucide-react';
+import { LayoutDashboard, Users, FileText, Building, Calendar, BookMarked, Map, Archive, Activity } from 'lucide-react';
 import { SignedIn, SignedOut, UserButton } from '@clerk/clerk-react';
 import { useProfile } from '../hooks/useProfile';
 import { ShieldCheck } from 'lucide-react';
@@ -40,7 +40,9 @@ export default function LayoutSidebar({ children }: { children: React.ReactNode 
         }}
       >
         <div className="sidebar-brand center-on-mobile">
-          <div style={{ width: '32px', height: '32px', minWidth: '32px', borderRadius: '50%', background: 'var(--primary)', color: 'white', display: 'flex', justifyContent: 'center', alignItems: 'center', fontWeight: 'bold' }}>+</div>
+          <div style={{ width: '32px', height: '32px', minWidth: '32px', borderRadius: '50%', background: 'var(--primary)', color: 'white', display: 'flex', justifyContent: 'center', alignItems: 'center', fontWeight: 'bold' }}>
+            <Activity size={18} />
+          </div>
           <Link to="/" style={{ whiteSpace: 'nowrap' }} className="hide-on-mobile">
             <h2 style={{ fontSize: '1.25rem', color: 'var(--secondary)' }}>CareFlow</h2>
             <div style={{ fontSize: '0.65rem', letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Healthcare<br />Intelligence</div>
@@ -54,7 +56,7 @@ export default function LayoutSidebar({ children }: { children: React.ReactNode 
               className="btn-primary w-full flex items-center justify-center gap-2"
               style={{ borderRadius: '12px', display: 'flex', textDecoration: 'none', whiteSpace: 'nowrap', padding: '0.75rem' }}
             >
-              <span style={{ fontSize: '1.25rem' }}>+</span> <span className="hide-on-mobile">New Analysis</span>
+              <span className="hide-on-mobile">Analyze Symptoms</span>
             </Link>
           </div>
         )}
@@ -96,6 +98,14 @@ export default function LayoutSidebar({ children }: { children: React.ReactNode 
                   <ShieldCheck size={12} className="text-primary" />
                   {role === 'hospital_staff' ? 'Medical Staff' : 'Patient Account'}
                 </div>
+                {role === 'hospital_staff' && profile?.hospital?.name && (
+                  <div
+                    className="font-medium uppercase tracking-wider mt-0.5"
+                    style={{ fontSize: '10px', color: 'var(--text-muted)', opacity: 0.8 }}
+                  >
+                    {profile.hospital.name}
+                  </div>
+                )}
               </div>
             </div>
           </SignedIn>

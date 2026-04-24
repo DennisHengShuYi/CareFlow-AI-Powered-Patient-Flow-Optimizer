@@ -98,16 +98,17 @@ DATABASE_URL_DIRECT=postgresql+asyncpg://<user>:<password>@<host>:5432/postgres
 # ================================
 # LLM Providers (Multi-Agent)
 # ================================
-LLM_PROVIDER=gemini
+LLM_PROVIDER=openai
 GEMINI_API_KEY=<your_gemini_api_key>
 GROQ_API_KEY=<your_groq_api_key>
 OPENAI_API_KEY=<your_openai_api_key>
+OPENAI_API_BASE=https://api.ilmu.ai/v1
 HUGGINGFACE_API_KEY=<your_hf_key>
 
 # Config-Driven Agent Models
-AGENT_EXTRACTOR_MODEL=models/gemini-1.5-flash-lite-001
-AGENT_STRATEGIST_MODEL=models/gemini-1.5-flash-lite-001
-AGENT_STRATEGIST_PROVIDER=gemini
+AGENT_EXTRACTOR_MODEL=ilmu-glm-5.1
+AGENT_STRATEGIST_MODEL=ilmu-glm-5.1
+AGENT_STRATEGIST_PROVIDER=openai
 AGENT_CRITIC_MODEL=llama-3.3-70b-versatile
 AGENT_CRITIC_PROVIDER=groq
 
@@ -208,3 +209,14 @@ Admin workflow for setting up a hospital:
 3. Create a **Room** (assign to a department)
 4. **Onboard Clinician** (select department → select room → enter name)
 5. View assignments on the **Live Board** tab
+
+---
+
+## 📅 Appointment Discovery Engine
+
+The platform features a robust discovery engine that ensures patients can always find availability:
+
+- **Whole-Day Availability**: Automatically generates queue-based slots from **9:00 AM to 8:00 PM** daily.
+- **Fallback Discovery Mode**: If no specific doctor is rostered for a department, the engine dynamically creates a general department queue to ensure the hospital remains discoverable.
+- **Specialty Aliasing**: Intelligent mapping for regional and international spelling variations (e.g., *Orthopedics* vs *Orthopaedics*, *Kardiologi* vs *Cardiology*).
+- **Proximity Ranking**: Hospitals are recommended based on a combination of specialty match and geographic distance, with no restrictive distance cutoffs.
