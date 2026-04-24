@@ -692,7 +692,7 @@ async def assign_doctor_to_room_api(
         if target_doctor_id:
             current_rooms = await supabase_rest.query_table(
                 "rooms",
-                {"doctor_id": f"eq.{target_doctor_id}"}   # ✅ keep eq. here (query_table needs it)
+                {"doctor_id": f"eq.{target_doctor_id}"}   
             ) or []
 
             print("Rooms currently assigned:", current_rooms)
@@ -700,7 +700,7 @@ async def assign_doctor_to_room_api(
             for r in current_rooms:
                 await supabase_rest.update_table(
                     "rooms",
-                    r["id"],                    # ✅ FIX: pass STRING id (not dict)
+                    r["id"],                    
                     {"doctor_id": None}
                 )
 
@@ -816,22 +816,55 @@ async def register_patient(req: RegisterPatientRequest, user_id: str = Depends(v
 # ---------------------------------------------------------------------------
 # GET /api/patients/search - Search patients by name
 # ---------------------------------------------------------------------------
+# @router.get("/api/patients/search")
+# async def search_patients(q: str, user_id: str = Depends(verify_clerk_token)):
+#     """Search existing patients by name."""
+#     try:
+#         uid = user_id.get("sub")
+#         h_id = await _get_hospital_id(uid)
+#         if not h_id:
+#             return {"patients": []}
+        
+#         async with AsyncSessionLocal() as db:
+#             patients = await CareFlowService.search_patients(db, h_id, q)
+#             return {
+#                 "patients": [
+#                     {
+#                         "id": str(p.id),
+#                         "name": p.full_name,
+#                         "ic_number": p.ic_number,
+#                         "phone": p.phone,
+#                         "email": p.email,
+#                         "complaint": p.metadata_data.get("complaint") if p.metadata_data else None,
+#                         "level": p.metadata_data.get("level") if p.metadata_data else 3
+#                     }
+#                     for p in patients
+#                 ]
+#             }
+#     except Exception as e:
+#         print(f"ERROR: [search_patients] {type(e).__name__}: {e}")
+#         return {"patients": []}
 @router.get("/api/patients/search")
 async def search_patients(q: str, user_id: str = Depends(verify_clerk_token)):
-    """Search existing patients by name."""
     try:
         uid = user_id.get("sub")
         h_id = await _get_hospital_id(uid)
-        if not h_id:
-            return {"patients": []}
-        
+
+        print("=== SEARCH DEBUG ===")
+        print("USER:", uid)
+        print("HOSPITAL:", h_id)
+        print("QUERY:", q)
+
         async with AsyncSessionLocal() as db:
             patients = await CareFlowService.search_patients(db, h_id, q)
+
+            print("FOUND PATIENTS:", len(patients))
+
             return {
                 "patients": [
                     {
                         "id": str(p.id),
-                        "name": p.full_name,
+                        "name": p.full_name,   # ✅ match frontend
                         "ic_number": p.ic_number,
                         "phone": p.phone,
                         "email": p.email,
@@ -841,10 +874,10 @@ async def search_patients(q: str, user_id: str = Depends(verify_clerk_token)):
                     for p in patients
                 ]
             }
+
     except Exception as e:
         print(f"ERROR: [search_patients] {type(e).__name__}: {e}")
         return {"patients": []}
-
 
 # ---------------------------------------------------------------------------
 # GET /api/doctors - Get all doctors for hospital

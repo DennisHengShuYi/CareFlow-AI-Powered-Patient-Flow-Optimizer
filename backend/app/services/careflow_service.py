@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.db import Hospital, Department, Doctor, Room, Session as TriageSession, Patient
 from app.utils.supabase_client import supabase_rest
 from typing import Optional
+import json
 
 IN_ROOM_STATUSES = frozenset({"In Consult", "In Resus"})
 
@@ -407,50 +408,219 @@ class CareFlowService:
         await db.commit()
         return True
 
+    # @staticmethod
+    # async def register_patient(db: AsyncSession, hospital_id: uuid.UUID, name: str, ic_number: str, phone: str, email: str, complaint: str, level: int):
+    #     """Register a new patient and add to queue via REST API."""
+    #     try:
+    #         # Create patient via Supabase REST API
+    #         patient_data = {
+    #             "full_name": name,
+    #             "ic_number": ic_number,
+    #             "phone": phone,
+    #             "email": email,
+    #             "language_preference": "en",
+    #             "metadata_data": {"complaint": complaint, "level": level}
+    #         }
+    #         patient_result = await supabase_rest.insert_table("patients", patient_data)
+    #         if not patient_result:
+    #             raise Exception("Failed to create patient in database")
+            
+    #         # Extract patient ID from result
+    #         patient_id = patient_result[0]["id"] if isinstance(patient_result, list) else patient_result.get("id")
+            
+    #         # Create session (add to queue) via REST API
+    #         session_data = {
+    #             "hospital_id": str(hospital_id),
+    #             "patient_id": patient_id,
+    #             "status": "waiting",
+    #             "urgency_level": f"P{level}",
+    #             "triage_result": {
+    #                 "summary": complaint,
+    #                 "urgency_level": f"P{level}",
+    #                 "preliminary_diagnosis": "Pending evaluation"
+    #             }
+    #         }
+    #         await supabase_rest.insert_table("sessions", session_data)
+            
+    #         # Return patient object with ID
+    #         patient = type('Patient', (), {'id': patient_id, 'full_name': name})()
+    #         return patient
+    #     except Exception as e:
+    #         print(f"ERROR in register_patient: {e}")
+    #         raise
+
     @staticmethod
-    async def register_patient(db: AsyncSession, hospital_id: uuid.UUID, name: str, ic_number: str, phone: str, email: str, complaint: str, level: int):
-        """Register a new patient and add to queue via REST API."""
+    async def register_patient(
+        db: AsyncSession,
+        hospital_id: uuid.UUID,
+        name: str,
+        ic_number: str,
+        phone: str,
+        email: str,
+        complaint: str,
+        level: int
+    ):
+        """Register or reuse patient, prevent duplicate queue, create session."""
+
         try:
-            # Create patient via Supabase REST API
-            patient_data = {
-                "full_name": name,
-                "ic_number": ic_number,
-                "phone": phone,
-                "email": email,
-                "language_preference": "en",
-                "metadata_data": {"complaint": complaint, "level": level}
-            }
-            patient_result = await supabase_rest.insert_table("patients", patient_data)
-            if not patient_result:
-                raise Exception("Failed to create patient in database")
-            
-            # Extract patient ID from result
-            patient_id = patient_result[0]["id"] if isinstance(patient_result, list) else patient_result.get("id")
-            
-            # Create session (add to queue) via REST API
+            # ============================================
+            # STEP 0: FORCE STRING (IMPORTANT)
+            # ============================================
+            hospital_id_str = str(hospital_id)
+
+            # ============================================
+            # STEP 1: Check if patient already exists
+            # ============================================
+            existing_patient = await supabase_rest.query_table(
+                "patients",
+                {"ic_number": f"eq.{ic_number}"}
+            )
+
+            if existing_patient:
+                patient = existing_patient[0]
+
+                raw_id = patient.get("id")
+
+                # ✅ HANDLE weird Supabase return
+                if isinstance(raw_id, dict):
+                    patient_id = str(raw_id.get("id"))
+                else:
+                    patient_id = str(raw_id)
+
+                print("✅ Existing patient found:", patient_id)
+
+                # OPTIONAL: update latest info
+                await supabase_rest.update_table(
+                    "patients",
+                    {"id": patient_id},
+                    {
+                        "full_name": name,
+                        "phone": phone,
+                        "email": email
+                    }
+                )
+
+            else:
+                print("🆕 Creating new patient")
+
+                patient_data = {
+                    "hospital_id": hospital_id_str,   # ✅ STRING
+                    "full_name": name,
+                    "ic_number": ic_number,
+                    "phone": phone,
+                    "email": email,
+                    "language_preference": "en"
+                }
+
+                patient_result = await supabase_rest.insert_table("patients", patient_data)
+
+                if not patient_result:
+                    raise Exception("Failed to create patient in database")
+
+                raw_id = patient_result[0]["id"]
+
+                # ✅ ALWAYS STRING
+                if isinstance(raw_id, dict):
+                    patient_id = str(raw_id.get("id"))
+                else:
+                    patient_id = str(raw_id)
+
+            # ============================================
+            # STEP 2: Check if patient already in queue
+            # ============================================
+            existing_session = await supabase_rest.query_table(
+                "sessions",
+                {
+                    "patient_id": f"eq.{patient_id}",
+                    "status": "neq.signed"
+                }
+            )
+
+            if existing_session:
+                print("⚠️ Patient already in queue")
+
+                return type('Patient', (), {
+                    'id': patient_id,
+                    'full_name': name
+                })()
+
+            # ============================================
+            # STEP 3: Create NEW session
+            # ============================================
             session_data = {
-                "hospital_id": str(hospital_id),
-                "patient_id": patient_id,
+                "hospital_id": hospital_id_str,   # ✅ MUST BE STRING
+                "patient_id": patient_id,         # ✅ MUST BE STRING
                 "status": "waiting",
                 "urgency_level": f"P{level}",
+
+                # ❗ only include if column exists
+                # "chief_complaint": complaint,
+
+                # ✅ JSON SAFE
                 "triage_result": {
                     "summary": complaint,
                     "urgency_level": f"P{level}",
                     "preliminary_diagnosis": "Pending evaluation"
                 }
             }
-            await supabase_rest.insert_table("sessions", session_data)
-            
-            # Return patient object with ID
-            patient = type('Patient', (), {'id': patient_id, 'full_name': name})()
-            return patient
+
+            print("DEBUG SESSION DATA:", session_data)
+
+            session_result = await supabase_rest.insert_table("sessions", session_data)
+
+            if not session_result:
+                raise Exception("Failed to create session")
+
+            print("✅ Session created for patient:", patient_id)
+
+            # ============================================
+            # STEP 4: Return
+            # ============================================
+            return type('Patient', (), {
+                'id': patient_id,
+                'full_name': name
+            })()
+
         except Exception as e:
             print(f"ERROR in register_patient: {e}")
             raise
 
     @staticmethod
     async def search_patients(db: AsyncSession, hospital_id: uuid.UUID, query: str):
-        """Search patients by name. Hospital filtering is done via Session relationship."""
+        """Search patients by name via Supabase REST when available, fall back to direct DB query."""
+        if supabase_rest.url and supabase_rest.key:
+            try:
+                query_value = f"%{query}%"
+                rows = await supabase_rest.query_table(
+                    "patients",
+                    {
+                        "full_name": f"ilike.{query_value}",
+                        "select": "*",
+                        "limit": 10,
+                    },
+                )
+                if rows is None:
+                    raise RuntimeError("Supabase REST returned no rows")
+
+                patients = []
+                for r in rows:
+                    patient_obj = type(
+                        "Patient",
+                        (),
+                        {
+                            "id": uuid.UUID(r.get("id")) if r.get("id") else None,
+                            "full_name": r.get("full_name"),
+                            "ic_number": r.get("ic_number"),
+                            "phone": r.get("phone"),
+                            "email": r.get("email"),
+                            "metadata_data": r.get("metadata_data"),
+                        },
+                    )
+                    patients.append(patient_obj)
+                return patients
+            except Exception as e:
+                print(f"WARN: Supabase search fallback failed: {e}")
+
         stmt = select(Patient).where(
             Patient.full_name.ilike(f"%{query}%")
         ).limit(10)
