@@ -283,9 +283,10 @@ const StatusBadge: React.FC<StatusBadgeProps> = ({
 interface CaseCardProps {
   caseData: StandardCase;
   onClick: () => void;
+  showActions?: boolean;
 }
 
-export const CaseCard: React.FC<CaseCardProps> = ({ caseData, onClick }) => {
+export const CaseCard: React.FC<CaseCardProps> = ({ caseData, onClick, showActions = true }) => {
   const { getToken } = useAuth();
   const [role, setRole] = useState<UserRole>(null);
 
@@ -345,10 +346,10 @@ export const CaseCard: React.FC<CaseCardProps> = ({ caseData, onClick }) => {
         </div>
 
         <StatusBadge type="GL" status={glStatus} caseId={caseData.id}
-          role={role} getToken={getToken} onStatusChange={setGlStatus} />
+          role={showActions ? role : null} getToken={getToken} onStatusChange={setGlStatus} />
 
         <StatusBadge type="Claim" status={claimStatus} caseId={caseData.id}
-          role={role} getToken={getToken} onStatusChange={setClaimStatus} />
+          role={showActions ? role : null} getToken={getToken} onStatusChange={setClaimStatus} />
 
         <div style={{ textAlign: 'right' }}>
           {caseData.status === 'Archived' ? (

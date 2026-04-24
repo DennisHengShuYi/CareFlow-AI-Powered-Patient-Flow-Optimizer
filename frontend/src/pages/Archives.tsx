@@ -453,7 +453,7 @@ export default function Archives() {
                                 workflow_status: c.workflowStatus
                               }}
                               onClick={() => handleSelectCase(c.id)}
-                            // showActions={false}  // ← disables GL/claim action buttons
+                              showActions={false}  // ← disables GL/claim action buttons
                             />
                           ))}
                         </div>

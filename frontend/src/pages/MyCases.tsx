@@ -57,7 +57,7 @@ const API = 'http://localhost:8002';
 
 
 
-export default function MyAppointments() {
+export default function MyCases() {
   const { getToken } = useAuth();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
