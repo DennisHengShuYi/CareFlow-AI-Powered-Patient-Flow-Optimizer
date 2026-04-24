@@ -4,6 +4,7 @@ from sqlalchemy import select, update, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.db import Hospital, Department, Doctor, Room, Session as TriageSession, Patient
 from app.utils.supabase_client import supabase_rest
+from app.config.llm_provider import llm
 from typing import Optional
 import json
 
@@ -407,6 +408,101 @@ class CareFlowService:
         await db.execute(stmt)
         await db.commit()
         return True
+
+    @staticmethod
+    async def generate_soap_note(db: AsyncSession, session_id: uuid.UUID, objective_note: str = ""):
+        """Generate a SOAP note draft from the encounter using the configured LLM."""
+        session_data = await supabase_rest.query_table(
+            "sessions",
+            {
+                "id": f"eq.{session_id}",
+                "select": "*,patients(*),doctors(full_name),departments(name)"
+            }
+        )
+        if not session_data:
+            return None
+
+        session = session_data[0]
+        patient_info = session.get("patients")
+        if isinstance(patient_info, list) and patient_info:
+            patient = patient_info[0]
+        else:
+            patient = patient_info or {}
+
+        doctor_info = session.get("doctors")
+        if isinstance(doctor_info, list) and doctor_info:
+            doctor_name = doctor_info[0].get("full_name", "Unassigned")
+        elif isinstance(doctor_info, dict):
+            doctor_name = doctor_info.get("full_name", "Unassigned")
+        else:
+            doctor_name = "Unassigned"
+
+        department_info = session.get("departments")
+        if isinstance(department_info, list) and department_info:
+            department_name = department_info[0].get("name", "Triage")
+        elif isinstance(department_info, dict):
+            department_name = department_info.get("name", "Triage")
+        else:
+            department_name = "Triage"
+
+        metadata = (patient.get("metadata_data") or {})
+        complaint = metadata.get("complaint") or session.get("triage_result", {}).get("summary", "No complaint provided")
+        vitals = {
+            "blood_pressure": metadata.get("blood_pressure", "N/A"),
+            "heart_rate": metadata.get("heart_rate", "N/A"),
+            "oxygen_saturation": metadata.get("oxygen_saturation", "N/A"),
+        }
+
+        prompt = (
+            "You are a clinical assistant that generates professional SOAP notes for emergency triage encounters. "
+            "Draft a short, focused SOAP note from the patient encounter details below. "
+            "Return only a JSON object with keys: subjective, assessment, plan. "
+            "Do not include any additional explanation outside the JSON object. "
+            "Use precise physician-style clinical language. "
+            "Ignore conversational fillers, greetings, bedside banter, and direct patient quotes unless they contain relevant clinical findings. "
+            "Do not reproduce phrases like 'okay', 'hi there', 'I'm sorry', or 'please' in the final note.\n\n"
+            f"Patient name: {patient.get('full_name', 'Unknown')}\n"
+            f"Patient phone: {patient.get('phone', 'Unknown')}\n"
+            f"Patient email: {patient.get('email', 'Unknown')}\n"
+            f"Patient MRN: {patient.get('id', 'Unknown')}\n"
+            f"Assigned doctor: {doctor_name}\n"
+            f"Department: {department_name}\n"
+            f"Urgency level: {session.get('urgency_level', 'Unknown')}\n"
+            f"Status: {session.get('status', 'Unknown')}\n"
+            f"Complaint: {complaint}\n"
+            f"Vitals: blood pressure={vitals['blood_pressure']}, heart rate={vitals['heart_rate']}, oxygen saturation={vitals['oxygen_saturation']}\n"
+            f"Objective findings: {objective_note or 'None'}\n"
+            "Summarize exam findings and plan concisely."
+        )
+
+        system = (
+            "You are an experienced clinical documentation assistant. "
+            "Generate structured SOAP note components for the encounter using the information provided."
+        )
+
+        raw = await llm.generate(prompt, system, response_format="json")
+
+        note = None
+        if isinstance(raw, str):
+            try:
+                note = json.loads(raw)
+            except json.JSONDecodeError:
+                import re
+                match = re.search(r"\{.*\}", raw, re.S)
+                if match:
+                    note = json.loads(match.group(0))
+        elif isinstance(raw, dict):
+            note = raw
+
+        if not note:
+            raise ValueError("Failed to parse SOAP note from LLM response")
+
+        return {
+            "status": "soap_generated",
+            "subjective": note.get("subjective", ""),
+            "assessment": note.get("assessment", ""),
+            "plan": note.get("plan", ""),
+        }
 
     # @staticmethod
     # async def register_patient(db: AsyncSession, hospital_id: uuid.UUID, name: str, ic_number: str, phone: str, email: str, complaint: str, level: int):

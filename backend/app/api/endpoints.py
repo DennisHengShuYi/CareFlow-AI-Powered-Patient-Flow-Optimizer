@@ -159,6 +159,10 @@ class SignNoteRequest(BaseModel):
     assessment_plan: str
 
 
+class GenerateSoapRequest(BaseModel):
+    objective_note: str | None = ""
+
+
 class OverridePatientRequest(BaseModel):
     level: int | None = None
     diagnosis: str | None = None
@@ -771,6 +775,24 @@ async def sign_note(req: SignNoteRequest, user_id: str = Depends(verify_clerk_to
     # For now, let's just use the request if we have it, or rely on frontend to pass patient_id
     # We'll need a way for the frontend to specify WHICH patient to sign
     pass # Wait, let's refine this to match the override logic
+
+@router.post("/api/triage/generate_soap/{session_id}")
+async def generate_soap_note(session_id: str, req: GenerateSoapRequest, user_id: str = Depends(verify_clerk_token)):
+    try:
+        async with AsyncSessionLocal() as db:
+            note = await CareFlowService.generate_soap_note(db, uuid.UUID(session_id), req.objective_note or "")
+            if not note:
+                raise HTTPException(status_code=404, detail="Session not found or unable to generate SOAP")
+            return note
+    except ValueError as e:
+        print(f"ERROR: [generate_soap_note] Invalid UUID: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid session ID format: {e}")
+    except Exception as e:
+        print(f"ERROR: [generate_soap_note] {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to generate SOAP note: {str(e)}")
+
 
 @router.post("/api/triage/sign_note/{session_id}")
 async def sign_note_v2(session_id: str, req: SignNoteRequest, user_id: str = Depends(verify_clerk_token)):
