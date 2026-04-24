@@ -38,6 +38,51 @@ class SupabaseRESTClient:
                 return None
             return response.json()
 
+    async def update_table(self, table: str, data: dict, filters: dict):
+        """Update data in a Supabase table via REST."""
+        if not self.url or not self.key:
+            return None
+            
+        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+            endpoint = f"{self.url}/rest/v1/{table}"
+            # Filters are passed as query params (e.g. ?id=eq.XXX)
+            response = await client.patch(endpoint, headers=self.headers, json=data, params=filters)
+            if response.status_code not in [200, 201, 204]:
+                print(f"DEBUG: Supabase REST error {response.status_code}: {response.text}")
+                return None
+            return response.json() if response.status_code != 204 else True
+
+    async def delete_table(self, table: str, filters: dict):
+        """Delete data from a Supabase table via REST."""
+        if not self.url or not self.key:
+            return None
+            
+        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+            endpoint = f"{self.url}/rest/v1/{table}"
+            response = await client.delete(endpoint, headers=self.headers, params=filters)
+            if response.status_code not in [200, 201, 204]:
+                print(f"DEBUG: Supabase REST error {response.status_code}: {response.text}")
+                return None
+            return True
+
+    async def upload_file(self, bucket: str, path: str, file_content: bytes, content_type: str):
+        """Upload a file to Supabase Storage via REST."""
+        if not self.url or not self.key:
+            return None
+            
+        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+            # Note: storage endpoint is different from rest/v1
+            endpoint = f"{self.url}/storage/v1/object/{bucket}/{path}"
+            headers = {
+                "Authorization": f"Bearer {self.key}",
+                "Content-Type": content_type
+            }
+            response = await client.post(endpoint, headers=headers, content=file_content)
+            if response.status_code not in [200, 201]:
+                print(f"DEBUG: Supabase Storage error {response.status_code}: {response.text}")
+                return None
+            return response.json()
+
     async def get_profile(self, user_id: str):
         """Fetch a single profile by ID."""
         data = await self.query_table("profiles", {"id": f"eq.{user_id}", "select": "*"})

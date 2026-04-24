@@ -11,7 +11,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, Form
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import text, select, and_, func
@@ -233,6 +233,17 @@ class AssignRoomBody(BaseModel):
 class NewCaseRequest(BaseModel):
     title: str
     department: str
+
+
+class UpdateCaseRequest(BaseModel):
+    title: str | None = None
+    department: str | None = None
+
+
+class UpdatePatientRequest(BaseModel):
+    full_name: str | None = None
+    insurers: list[str] | None = None
+
 
 
 def _calculate_haversine(lat1, lon1, lat2, lon2):
@@ -1106,7 +1117,7 @@ async def get_active_patients():
         response = await supabase_rest.query_table(
             "patients",
             {
-                "select": "id, full_name, age, category, status, insurers, medical_cases(*)",
+                "select": "id, full_name, age, category, status, insurers, medical_cases(id, title, department, status, workflow_status, has_medical_bill, medical_bill_price, created_at, medical_bills(file_url, total_bill))",
                 "status": "eq.active",
                 "order": "created_at.desc"
             }
@@ -1133,8 +1144,12 @@ async def get_active_patients():
                         "title": c.get("title"),
                         "department": c.get("department"),
                         "status": c.get("status"),
-                        "workflow_status": c.get("workflow_status"),
-                        "created_at": c.get("created_at")
+                          "workflow_status": c.get("workflow_status"),
+                          "has_medical_bill": c.get("has_medical_bill"),
+                          "medical_bill_price": c.get("medical_bill_price"),
+                          "bill_url": next((b.get("file_url") for b in c.get("medical_bills", []) if b.get("case_id") == c.get("id")), 
+                                          c.get("medical_bills", [{}])[0].get("file_url") if c.get("medical_bills") else None),
+                          "created_at": c.get("created_at")
                     } 
                     for c in p.get("medical_cases", [])
                 ]
@@ -1189,6 +1204,154 @@ async def create_patient_case(patient_id: str, body: NewCaseRequest):
         
     except Exception as e:
         print(f"[CASE_CREATE] ERROR: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/api/cases/{case_id}")
+async def update_patient_case(case_id: str, body: UpdateCaseRequest):
+    try:
+        print(f"[CASE_UPDATE] Updating case {case_id}")
+        
+        update_data = {}
+        if body.title is not None: update_data["title"] = body.title
+        if body.department is not None: update_data["department"] = body.department
+        
+        if not update_data:
+            return {"success": True, "message": "No changes provided"}
+            
+        response = await supabase_rest.update_table("medical_cases", update_data, {"id": f"eq.{case_id}"})
+        
+        if not response:
+            raise HTTPException(status_code=500, detail="Failed to update case in Supabase")
+            
+        return {"success": True, "data": response}
+        
+    except Exception as e:
+        print(f"[CASE_UPDATE] ERROR: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/api/cases/{case_id}")
+async def delete_medical_case(case_id: str):
+    try:
+        print(f"[MANUAL_DELETE] Starting deletion process for case: {case_id}")
+        
+        # 1. Fetch appointments for this case to handle nested dependencies
+        appointments = await supabase_rest.query_table("appointments", {"case_id": f"eq.{case_id}", "select": "id, bill_id"})
+        apt_ids = [a["id"] for a in appointments] if appointments else []
+        print(f"[MANUAL_DELETE] Found {len(apt_ids)} linked appointments.")
+
+        # 2. Break circular dependencies in appointments (NULL out bill_id)
+        if apt_ids:
+            print(f"[MANUAL_DELETE] Nulling out bill_id in appointments to break circular links.")
+            for aid in apt_ids:
+                # Break the link so the bill can be deleted
+                await supabase_rest.update_table("appointments", {"bill_id": None}, {"id": f"eq.{aid}"})
+
+        # 3. Delete linked medical bills (the children of appointments and cases)
+        # 3a. Bills linked to the appointments
+        if apt_ids:
+            print(f"[MANUAL_DELETE] Deleting bills linked to appointments.")
+            await supabase_rest.delete_table("medical_bills", {"appointment_id": f"in.({','.join(apt_ids)})"})
+        
+        # 3b. Bills linked to the case directly
+        print(f"[MANUAL_DELETE] Deleting bills linked directly to the case.")
+        await supabase_rest.delete_table("medical_bills", {"case_id": f"eq.{case_id}"})
+
+        # 4. Delete the appointments (the children of the case)
+        if apt_ids:
+            print(f"[MANUAL_DELETE] Deleting appointments linked to the case.")
+            await supabase_rest.delete_table("appointments", {"case_id": f"eq.{case_id}"})
+        
+        # 5. Delete the case itself (the parent)
+        print(f"[MANUAL_DELETE] Finally deleting the medical case record.")
+        res = await supabase_rest.delete_table("medical_cases", {"id": f"eq.{case_id}"})
+        
+        if not res:
+            # If res is None, it might mean the case was already deleted or doesn't exist
+            return {"success": True, "message": "Case was already removed or not found."}
+            
+        print(f"[MANUAL_DELETE] Success: Case {case_id} and all children deleted.")
+        return {"success": True, "message": "Case and all related records deleted successfully."}
+
+    except Exception as e:
+        print(f"[MANUAL_DELETE] CRITICAL ERROR: {str(e)}")
+        # If it's a 409/23503 error, we know there's a child we missed
+        raise HTTPException(status_code=500, detail=f"Manual deletion failed: {str(e)}")
+
+
+@router.patch("/api/patients/{patient_id}")
+async def update_patient_info(patient_id: str, body: UpdatePatientRequest):
+    try:
+        print(f"[PATIENT_UPDATE] Updating patient {patient_id}")
+        
+        update_data = {}
+        if body.full_name is not None: update_data["full_name"] = body.full_name
+        if body.insurers is not None: update_data["insurers"] = body.insurers
+        
+        if not update_data:
+            return {"success": True, "message": "No changes provided"}
+            
+        response = await supabase_rest.update_table("patients", update_data, {"id": f"eq.{patient_id}"})
+        
+        if not response:
+            raise HTTPException(status_code=500, detail="Failed to update patient in Supabase")
+            
+        return {"success": True, "data": response}
+        
+    except Exception as e:
+        print(f"[PATIENT_UPDATE] ERROR: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/cases/{case_id}/bill")
+async def upload_case_bill(
+    case_id: str, 
+    total_bill: float = Form(...),
+    file: UploadFile = File(...)
+):
+    try:
+        print(f"[BILL_UPLOAD] Uploading bill for case {case_id}")
+        
+        # 1. Upload file to Supabase Storage
+        file_content = await file.read()
+        file_ext = file.filename.split(".")[-1] if "." in file.filename else "pdf"
+        storage_path = f"bills/{case_id}_{int(time.time())}.{file_ext}"
+        
+        # We assume a bucket named 'medical_bills' exists
+        upload_res = await supabase_rest.upload_file("medical_bills", storage_path, file_content, file.content_type)
+        
+        # Construct public URL (adjust based on Supabase public/private bucket settings)
+        file_url = f"{supabase_rest.url}/storage/v1/object/public/medical_bills/{storage_path}"
+        
+        # 2. Get patient_id for the case
+        case_response = await supabase_rest.query_table("medical_cases", {"select": "patient_id", "id": f"eq.{case_id}"})
+        if not case_response:
+            raise HTTPException(status_code=404, detail="Case not found")
+        patient_id = case_response[0]["patient_id"]
+        
+        # 3. Create medical_bills entry
+        bill_data = {
+            "total_bill": total_bill,
+            "status": "pending",
+            "file_url": file_url,
+            "case_id": case_id
+        }
+        bill_res = await supabase_rest.insert_table("medical_bills", bill_data)
+        if not bill_res:
+            raise HTTPException(status_code=500, detail="Failed to create bill in Supabase")
+        bill_id = bill_res[0]["id"]
+        
+        # 4. Update medical_cases: has_medical_bill = True AND medical_bill_price = total_bill
+        await supabase_rest.update_table("medical_cases", {
+            "has_medical_bill": True,
+            "medical_bill_price": total_bill
+        }, {"id": f"eq.{case_id}"})
+        
+        return {"success": True, "bill_id": bill_id, "file_url": file_url}
+        
+    except Exception as e:
+        print(f"[BILL_UPLOAD] ERROR: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

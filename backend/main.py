@@ -54,14 +54,34 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    body = exc.body
+    serializable_body = None
+    
+    try:
+        # FormData objects are not JSON serializable, so we convert to dict
+        if str(type(body)) == "<class 'starlette.datastructures.FormData'>":
+            res = {}
+            for key, value in dict(body).items():
+                if hasattr(value, 'filename'): # It's an UploadFile
+                    res[key] = f"File: {value.filename} ({value.size} bytes)"
+                else:
+                    res[key] = value
+            serializable_body = res
+        elif isinstance(body, (dict, list, str, int, float, bool, type(None))):
+            serializable_body = body
+        else:
+            serializable_body = str(body)
+    except Exception:
+        serializable_body = str(body)
+
     exc_str = f'{exc}'.replace('\n', ' ').replace('   ', ' ')
-    error_msg = f"DEBUG: [422] Validation Error: {exc_str} | Body: {exc.body}"
+    error_msg = f"DEBUG: [422] Validation Error: {exc_str} | Body: {serializable_body}"
     print(error_msg)
     with open('backend_errors.log', 'a') as f:
         f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - 422_ERROR - {error_msg}\n")
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors(), "body": exc.body}
+        content={"detail": exc.errors(), "body": serializable_body}
     )
 
 app.include_router(router)

@@ -11,7 +11,12 @@ import {
   Plus,
   ArrowRight,
   X,
-  Loader2
+  Loader2,
+  Pencil,
+  Trash2,
+  Receipt,
+  UploadCloud,
+  FileText
 } from 'lucide-react';
 
 interface Case {
@@ -21,6 +26,9 @@ interface Case {
   glStatus: 'none' | 'requested' | 'approved';
   claimStatus: 'none' | 'requested' | 'approved';
   totalBill: number;
+  hasMedicalBill: boolean;
+  medicalBillPrice?: number;
+  billUrl?: string;
 }
 
 interface Patient {
@@ -93,7 +101,9 @@ const fetchPatients = async (): Promise<Patient[]> => {
         department: c.department ?? 'General',
         glStatus: normaliseStatus(c.workflow_status),
         claimStatus: 'none',
-        totalBill: 0
+        totalBill: typeof c.medical_bill_price === 'number' ? c.medical_bill_price : parseFloat(c.medical_bill_price || '0'),
+        hasMedicalBill: c.has_medical_bill ?? false,
+        billUrl: c.bill_url
       }));
       return {
         id: p.id,
@@ -129,6 +139,23 @@ export default function Patients() {
   const [newCaseDepartment, setNewCaseDepartment] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Edit Patient State
+  const [isEditPatientModalOpen, setIsEditPatientModalOpen] = useState(false);
+  const [editPatientName, setEditPatientName] = useState('');
+  const [editPatientInsurers, setEditPatientInsurers] = useState('');
+
+  // Edit Case State
+  const [isEditCaseModalOpen, setIsEditCaseModalOpen] = useState(false);
+  const [editingCaseId, setEditingCaseId] = useState<string | null>(null);
+  const [editCaseTitle, setEditCaseTitle] = useState('');
+  const [editCaseDepartment, setEditCaseDepartment] = useState('');
+
+  // Upload Bill State
+  const [isUploadBillModalOpen, setIsUploadBillModalOpen] = useState(false);
+  const [uploadingCaseId, setUploadingCaseId] = useState<string | null>(null);
+  const [billAmount, setBillAmount] = useState('');
+  const [billFile, setBillFile] = useState<File | null>(null);
 
   const refreshPatients = () => {
     setLoading(true);
@@ -174,6 +201,114 @@ export default function Patients() {
       refreshPatients();
     } catch (err: any) {
       setError(err.message || 'An error occurred');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleUpdatePatient = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedPatientId) return;
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API}/api/patients/${selectedPatientId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : ''
+        },
+        body: JSON.stringify({
+          full_name: editPatientName,
+          insurers: editPatientInsurers.split(',').map(i => i.trim()).filter(i => i)
+        })
+      });
+      if (!response.ok) throw new Error('Failed to update patient');
+      setIsEditPatientModalOpen(false);
+      refreshPatients();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleUpdateCase = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCaseId) return;
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API}/api/cases/${editingCaseId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : ''
+        },
+        body: JSON.stringify({
+          title: editCaseTitle,
+          department: editCaseDepartment
+        })
+      });
+      if (!response.ok) throw new Error('Failed to update case');
+      setIsEditCaseModalOpen(false);
+      refreshPatients();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteCase = async (caseId: string) => {
+    if (!window.confirm('Are you sure you want to delete this case?')) return;
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API}/api/cases/${caseId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : ''
+        }
+      });
+      if (!response.ok) throw new Error('Failed to delete case');
+      refreshPatients();
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleUploadBill = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!uploadingCaseId || !billAmount || !billFile) {
+      setError('Please provide both the bill amount and a file.');
+      return;
+    }
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      const token = localStorage.getItem('token');
+      const formData = new FormData();
+      formData.append('total_bill', billAmount);
+      if (billFile) {
+        formData.append('file', billFile);
+      }
+
+      const response = await fetch(`${API}/api/cases/${uploadingCaseId}/bill`, {
+        method: 'POST',
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : ''
+        },
+        body: formData
+      });
+      if (!response.ok) throw new Error('Failed to upload bill');
+      setIsUploadBillModalOpen(false);
+      setBillAmount('');
+      setBillFile(null);
+      refreshPatients();
+    } catch (err: any) {
+      setError(err.message);
     } finally {
       setIsSubmitting(false);
     }
@@ -382,8 +517,18 @@ export default function Patients() {
                   }}>
                     {selectedPatient.type} Profile
                   </div>
-                  <h2 style={{ fontSize: '2.5rem', color: 'white', fontWeight: 800, marginBottom: '0.5rem' }}>
+                  <h2 style={{ fontSize: '2.5rem', color: 'white', fontWeight: 800, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
                     {selectedPatient.name}
+                    <button
+                      onClick={() => {
+                        setEditPatientName(selectedPatient.name);
+                        setEditPatientInsurers(selectedPatient.insurers.join(', '));
+                        setIsEditPatientModalOpen(true);
+                      }}
+                      style={{ background: 'none', border: 'none', color: 'white', opacity: 0.7, cursor: 'pointer', padding: '4px' }}
+                    >
+                      <Pencil size={20} />
+                    </button>
                   </h2>
                   <div style={{ display: 'flex', gap: '2rem', opacity: 0.9 }}>
                     <div>
@@ -511,15 +656,75 @@ export default function Patients() {
                         alignItems: 'center'
                       }}>
                         <div style={{ cursor: 'pointer' }} onClick={() => navigate(`/cases/${c.id}`)}>
-                          <div style={{
-                            fontSize: '1.125rem', fontWeight: 800, color: 'var(--primary)',
-                            marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '0.5rem'
-                          }}>
-                            {c.type} <ArrowRight size={14} />
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <div style={{ fontSize: '1.125rem', fontWeight: 800, color: 'var(--primary)', marginBottom: '4px' }}>
+                              {c.type}
+                            </div>
+                            <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                              {c.department} Department
+                            </div>
                           </div>
-                          <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', fontWeight: 600 }}>
-                            {c.department} Department
-                          </div>
+                        </div>
+
+                        <div style={{ 
+                          display: 'grid', 
+                          gridTemplateColumns: 'repeat(2, 40px)', 
+                          gap: '0.5rem', 
+                          alignItems: 'center' 
+                        }}>
+                          <button 
+                            onClick={() => {
+                              setEditingCaseId(c.id);
+                              setEditCaseTitle(c.type);
+                              setEditCaseDept(c.department);
+                              setIsEditCaseModalOpen(true);
+                            }}
+                            style={{ background: 'var(--neutral-300)', border: 'none', padding: '8px', borderRadius: '8px', cursor: 'pointer', color: 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                            title="Edit Case"
+                          >
+                            <Pencil size={16} />
+                          </button>
+                          
+                          <button 
+                            onClick={() => {
+                              setUploadingCaseId(c.id);
+                              setIsUploadBillModalOpen(true);
+                            }}
+                            style={{ background: c.hasMedicalBill ? 'var(--primary-fixed)' : 'var(--neutral-300)', border: 'none', padding: '8px', borderRadius: '8px', cursor: 'pointer', color: c.hasMedicalBill ? 'var(--primary)' : 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                            title="Upload Bill"
+                          >
+                            <Receipt size={16} />
+                          </button>
+
+                          {c.hasMedicalBill ? (
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (c.billUrl) {
+                                  window.open(c.billUrl, '_blank');
+                                } else {
+                                  alert('Bill URL not found. Please try re-uploading.');
+                                }
+                              }}
+                              style={{ background: 'var(--primary-fixed)', border: 'none', padding: '8px', borderRadius: '8px', cursor: 'pointer', color: 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                              title="View Bill PDF"
+                            >
+                              <FileText size={16} />
+                            </button>
+                          ) : (
+                            <div style={{ width: '40px' }} /> 
+                          )}
+
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteCase(c.id);
+                            }}
+                            style={{ background: 'rgba(239, 83, 80, 0.1)', border: 'none', padding: '8px', borderRadius: '8px', cursor: 'pointer', color: '#ef5350', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                            title="Delete Case"
+                          >
+                            <Trash2 size={16} />
+                          </button>
                         </div>
 
                         {renderStatus(c.glStatus, 'GL')}
@@ -651,6 +856,114 @@ export default function Patients() {
                 >
                   {isSubmitting ? <Loader2 size={18} className="animate-spin" /> : 'Create Case'}
                 </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Patient Modal */}
+      {isEditPatientModalOpen && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex',
+          alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+          backdropFilter: 'blur(4px)'
+        }}>
+          <div className="card" style={{ width: '100%', maxWidth: '500px', padding: '2rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h3 style={{ fontSize: '1.5rem', fontWeight: 800 }}>Edit Patient Info</h3>
+              <button onClick={() => setIsEditPatientModalOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={24} /></button>
+            </div>
+            <form onSubmit={handleUpdatePatient}>
+              <div style={{ marginBottom: '1.5rem' }}>
+                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, marginBottom: '0.5rem', color: 'var(--text-muted)' }}>FULL NAME</label>
+                <input type="text" required value={editPatientName} onChange={e => setEditPatientName(e.target.value)} style={{ width: '100%', padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--neutral-400)' }} />
+              </div>
+              <div style={{ marginBottom: '2rem' }}>
+                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, marginBottom: '0.5rem', color: 'var(--text-muted)' }}>INSURERS (comma separated)</label>
+                <input type="text" value={editPatientInsurers} onChange={e => setEditPatientInsurers(e.target.value)} placeholder="e.g. Allianz, AIA" style={{ width: '100%', padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--neutral-400)' }} />
+              </div>
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <button type="button" onClick={() => setIsEditPatientModalOpen(false)} style={{ flex: 1, padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--neutral-400)', background: 'white', fontWeight: 700 }}>Cancel</button>
+                <button type="submit" disabled={isSubmitting} style={{ flex: 1, padding: '0.75rem', borderRadius: '10px', border: 'none', backgroundColor: 'var(--primary)', color: 'white', fontWeight: 700 }}>{isSubmitting ? <Loader2 className="animate-spin" /> : 'Save Changes'}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Case Modal */}
+      {isEditCaseModalOpen && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex',
+          alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+          backdropFilter: 'blur(4px)'
+        }}>
+          <div className="card" style={{ width: '100%', maxWidth: '500px', padding: '2rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h3 style={{ fontSize: '1.5rem', fontWeight: 800 }}>Edit Case</h3>
+              <button onClick={() => setIsEditCaseModalOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={24} /></button>
+            </div>
+            <form onSubmit={handleUpdateCase}>
+              <div style={{ marginBottom: '1.5rem' }}>
+                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, marginBottom: '0.5rem', color: 'var(--text-muted)' }}>CASE TITLE</label>
+                <input type="text" required value={editCaseTitle} onChange={e => setEditCaseTitle(e.target.value)} style={{ width: '100%', padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--neutral-400)' }} />
+              </div>
+              <div style={{ marginBottom: '2rem' }}>
+                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, marginBottom: '0.5rem', color: 'var(--text-muted)' }}>DEPARTMENT</label>
+                <select required value={editCaseDepartment} onChange={e => setEditCaseDepartment(e.target.value)} style={{ width: '100%', padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--neutral-400)', background: 'white' }}>
+                  {HOSPITAL_DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </div>
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <button type="button" onClick={() => setIsEditCaseModalOpen(false)} style={{ flex: 1, padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--neutral-400)', background: 'white', fontWeight: 700 }}>Cancel</button>
+                <button type="submit" disabled={isSubmitting} style={{ flex: 1, padding: '0.75rem', borderRadius: '10px', border: 'none', backgroundColor: 'var(--primary)', color: 'white', fontWeight: 700 }}>{isSubmitting ? <Loader2 className="animate-spin" /> : 'Save Changes'}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Upload Bill Modal */}
+      {isUploadBillModalOpen && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex',
+          alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+          backdropFilter: 'blur(4px)'
+        }}>
+          <div className="card" style={{ width: '100%', maxWidth: '500px', padding: '2rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h3 style={{ fontSize: '1.5rem', fontWeight: 800 }}>Upload Medical Bill</h3>
+              <button onClick={() => setIsUploadBillModalOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={24} /></button>
+            </div>
+            <form onSubmit={handleUploadBill}>
+              <div style={{ marginBottom: '1.5rem' }}>
+                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, marginBottom: '0.5rem', color: 'var(--text-muted)' }}>TOTAL BILL AMOUNT (RM)</label>
+                <input type="number" step="0.01" required value={billAmount} onChange={e => setBillAmount(e.target.value)} placeholder="0.00" style={{ width: '100%', padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--neutral-400)' }} />
+              </div>
+              <div style={{ marginBottom: '2rem' }}>
+                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, marginBottom: '0.5rem', color: 'var(--text-muted)' }}>SELECT FILE</label>
+                <div style={{
+                  border: '2px dashed var(--neutral-400)', padding: '2rem', borderRadius: '12px',
+                  textAlign: 'center', cursor: 'pointer', backgroundColor: 'var(--neutral-100)',
+                  position: 'relative'
+                }}>
+                  <UploadCloud size={32} color="var(--primary)" style={{ marginBottom: '0.5rem' }} />
+                  <div style={{ fontSize: '0.875rem', fontWeight: 600 }}>{billFile ? billFile.name : 'Click to select or drag and drop'}</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>PDF, JPG or PNG (max 10MB)</div>
+                  <input
+                    type="file"
+                    onChange={e => setBillFile(e.target.files ? e.target.files[0] : null)}
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
+                  />
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <button type="button" onClick={() => setIsUploadBillModalOpen(false)} style={{ flex: 1, padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--neutral-400)', background: 'white', fontWeight: 700 }}>Cancel</button>
+                <button type="submit" disabled={isSubmitting} style={{ flex: 1, padding: '0.75rem', borderRadius: '10px', border: 'none', backgroundColor: 'var(--primary)', color: 'white', fontWeight: 700 }}>{isSubmitting ? <Loader2 className="animate-spin" /> : 'Upload Bill'}</button>
               </div>
             </form>
           </div>
