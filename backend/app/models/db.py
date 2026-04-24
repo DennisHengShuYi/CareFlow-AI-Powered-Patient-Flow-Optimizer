@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Integer, Float, ForeignKey, DateTime, Text, Boolean, Enum as SAEnum, text
+from sqlalchemy import String, Integer, Float, ForeignKey, DateTime, Text, Boolean, Enum as SAEnum, text, ARRAY
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
@@ -64,6 +64,14 @@ class Patient(Base):
     metadata_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    status: Mapped[str] = mapped_column(String(50), default="active", nullable=False)
+    age: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    insurers: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True, server_default=text("'{}'::character varying[]"))
+    case_id: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
+    insurance_provider: Mapped[str | None] = mapped_column(Text, nullable=True)
+    policy_number: Mapped[str | None] = mapped_column(Text, nullable=True)
+    policy_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 

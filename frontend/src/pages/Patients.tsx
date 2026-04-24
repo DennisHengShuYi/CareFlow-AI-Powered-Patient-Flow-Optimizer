@@ -12,6 +12,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { CaseCard, type StandardCase, type CaseStatusType } from '../components/CaseCard';
+import { useAuth } from '@clerk/clerk-react';
 
 interface Case {
   rejection_reason: string;
@@ -92,6 +93,34 @@ export default function Patients() {
   const [loading, setLoading] = useState(true);
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [totalCaseBill, setTotalCaseBill] = useState<any>(null);
+  const { getToken } = useAuth();
+
+  const loadTotalCaseBill = async (cases: Case[]) => {
+    try {
+      const token = await getToken();
+
+      const caseIds = cases.map(c => c.id).join(",");
+
+      const res = await fetch(
+        `${API}/api/cases/bills/summary?case_ids=${caseIds}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      if (!res.ok) throw new Error("Failed to load bill summary");
+
+      const data = await res.json();
+      console.log("Bill summary data:", data);
+      console.log("Keys:", Object.keys(data));
+      setTotalCaseBill(data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   // ✅ Single useEffect — no duplicate fetch
   useEffect(() => {
@@ -107,6 +136,12 @@ export default function Patients() {
   }, []);
 
   const selectedPatient = patients.find(p => p.id === selectedPatientId) ?? null;
+
+  useEffect(() => {
+    if (!selectedPatient) return;
+
+    loadTotalCaseBill(selectedPatient.cases);
+  }, [selectedPatient]);
 
   // Remove local renderStatus as it is now in CaseCard.tsx
 
@@ -385,7 +420,7 @@ export default function Patients() {
                         workflow_status: c.workflow_status,
                         gl_status: c.glStatus as CaseStatusType,
                         claim_status: c.claimStatus as CaseStatusType,
-                        totalBill: c.totalBill,
+                        totalBill: totalCaseBill?.bills?.[c.id] ?? 0,
                         rejection_reason: c.rejection_reason
                       }}
                       onClick={() => navigate(`/cases/${c.id}`)}

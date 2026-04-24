@@ -10,6 +10,7 @@ import re
 import time
 import uuid
 from datetime import datetime, timezone
+from typing import Dict, List
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
@@ -220,6 +221,13 @@ class NewDepartmentBody(BaseModel):
 
 class NewRoomBody(BaseModel):
     label: str
+
+
+class UpdateProfileRequest(BaseModel):
+    full_name: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    insurers: List[str] | None = None
 
 
 class NewDoctorBody(BaseModel):
@@ -1372,7 +1380,7 @@ async def get_my_cases(user=Depends(verify_clerk_token)):
         print(f"[MY_CASES] Fetching cases for patient {clerk_id}")
 
         select_query = (
-            "id,full_name,age,category,status,insurers,"
+            "id,full_name,age,category,status,insurers,phone,email,"
             "medical_cases!patient_id("
             "*, "
             "gl!gl_id(status,file_url, total_amount, rejection_reason), "
@@ -1422,6 +1430,9 @@ async def get_my_cases(user=Depends(verify_clerk_token)):
                 for c in p.get("medical_cases", [])
             ],
             "age": p.get("age"),
+            "full_name": p.get("full_name"),
+            "phone": p.get("phone"),
+            "email": p.get("email"),
             "diagnoses": diagnoses,
             "insurers": p.get("insurers"),
 
@@ -1430,6 +1441,46 @@ async def get_my_cases(user=Depends(verify_clerk_token)):
     except Exception as e:
         print(f"[MY_CASES] ERROR: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/api/my/patientInfo")
+async def update_my_patient_info(
+    body: UpdateProfileRequest,
+    user: dict = Depends(verify_clerk_token)
+):
+    clerk_user_id = user.get("sub")
+    if not clerk_user_id:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    # 1. Find the patient record linked to this clerk_user_id
+    patients = await supabase_rest.query_table("patients", {"profile_id": f"eq.{clerk_user_id}", "select": "id"})
+    if not patients:
+        raise HTTPException(status_code=404, detail="Patient record not found")
+    
+    patient_id = patients[0]["id"]
+    
+    # 2. Update the patient record
+    update_data = {}
+    if body.full_name is not None:
+        update_data["full_name"] = body.full_name
+    if body.phone is not None:
+        update_data["phone"] = body.phone
+    if body.email is not None:
+        update_data["email"] = body.email
+    if body.insurers is not None:
+        update_data["insurers"] = body.insurers
+        
+    if not update_data:
+        return {"success": True, "message": "No changes provided"}
+    
+    # Use PATCH to update existing record
+    res = await supabase_rest.update_table("patients", update_data, {"id": f"eq.{patient_id}"})
+    
+    # Also update the profile table if full_name is changed
+    if body.full_name is not None:
+        await supabase_rest.update_table("profiles", {"full_name": body.full_name}, {"id": f"eq.{clerk_user_id}"})
+        
+    return {"success": True, "data": res}
 
 
 # ─────────────────────────────────────────────
@@ -1578,12 +1629,43 @@ async def get_case_timeline(case_id: str):
  
 VALID_STATUS = {"none", "requested", "approved", "rejected"}
 
+@router.get("/api/cases/bills/summary")
+async def get_cases_bill_summary(
+    case_ids: str,
+    user=Depends(verify_clerk_token)
+):
+    if not case_ids:
+        return {"bills": {}}
 
-def validate_status(status: str):
-    s = status.lower().strip()
-    if s not in VALID_STATUS:
-        raise HTTPException(status_code=400, detail="Invalid status")
-    return s
+    ids = [cid.strip() for cid in case_ids.split(",") if cid.strip()]
+    if not ids:
+        return {"bills": {}}
+
+    try:
+        summary = await supabase_rest.query_table(
+            "case_bill_summary",
+            {
+                "select": "case_id,total_bill",
+                "case_id": f"in.({','.join(ids)})"
+            }
+        )
+
+        result = {
+            cid: 0.0 for cid in ids
+        }
+
+        print("[BILLS_SUMMARY] ids:", ids)
+        print("[BILLS_SUMMARY] summary:", summary)
+        for row in (summary or []):
+            cid = row.get("case_id")
+            if cid:
+                result[cid] = float(row.get("total_bill") or 0)
+
+        return {"bills": result}
+
+    except Exception as e:
+        print(f"[BILLS_SUMMARY] ERROR: {e}")
+        return {"bills": {cid: 0.0 for cid in ids}}
 
 # @router.patch("/cases/{case_id}/gl-status")
 # async def update_gl_status(case_id: str, status: str = Query(...)):
@@ -1613,6 +1695,12 @@ def validate_status(status: str):
 
 #     return {"success": True, "claim_status": status}
 
+def validate_status(status: str):
+    s = status.lower().strip()
+    if s not in VALID_STATUS:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    return s
+    
 @router.patch("/cases/{case_id}/status")
 async def update_status(case_id: str, type: str, status: str):
     status = validate_status(status)
