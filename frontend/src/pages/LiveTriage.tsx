@@ -70,6 +70,7 @@ export default function LiveTriage() {
   };
   const [dashboardTab, setDashboardTab] = useState<"flow" | "capacity">("flow");
   const [boardData, setBoardData] = useState<{ departments: any[] } | null>(null,);
+  const [utilizationHistory, setUtilizationHistory] = useState<Array<{ time: string; utilization: number }>>([]);
 
   useEffect(() => {
     if (boardData?.departments) {
@@ -148,6 +149,20 @@ export default function LiveTriage() {
 
       setData(overview);
       setBoardData(board);
+
+      const nextUtilization = Math.min(
+        100,
+        Math.round((overview.queue_active / 20) * 100),
+      );
+      const nowLabel = new Date().toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      setUtilizationHistory((prev) => {
+        const next = [...prev, { time: nowLabel, utilization: nextUtilization }];
+        return next.slice(-6);
+      });
+
       if (board.catalog) {
         // keep board data for future facility catalog features
       }
@@ -397,17 +412,39 @@ export default function LiveTriage() {
   };
 
   const handleSelectPatient = async (patientId: string) => {
-    // This now updates the status to 'In Consult' in Supabase via the API
+    // This auto-assigns a department and available doctor using AI, then moves the patient to In Consult
     try {
       const token = await getToken();
-      await fetch(`${API}/api/triage/override/${patientId}`, {
+      const response = await fetch(`${API}/api/triage/auto_assign/${patientId}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ status: "In Consult" }),
       });
+
+      if (!response.ok) {
+        console.error("Auto assign failed", response.status);
+        showToast("error", "Unable to auto assign patient. Falling back to consult status.");
+        await fetch(`${API}/api/triage/override/${patientId}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ status: "In Consult" }),
+        });
+      } else {
+        const data = await response.json();
+        const assignment = data.assignment;
+        if (assignment) {
+          showToast(
+            "success",
+            `Assigned to ${assignment.department_name} with Dr ${assignment.doctor_name}`,
+          );
+        }
+      }
+
       setSelectedSessionId(patientId);
       setAssessment("");
       setPlan("");
@@ -416,6 +453,7 @@ export default function LiveTriage() {
       fetchData();
     } catch (e) {
       console.error(e);
+      showToast("error", "Patient selection failed. Please try again.");
     }
   };
 
@@ -424,14 +462,29 @@ export default function LiveTriage() {
     if (!encounterToSign) return;
     try {
       const token = await getToken();
-      await fetch(`${API}/api/triage/override/${encounterToSign.id}`, {
+      const response = await fetch(`${API}/api/triage/sign_note/${encounterToSign.id}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ status: "signed" }),
+        body: JSON.stringify({
+          assessment_plan: `${assessment}\n\n${plan}`.trim(),
+          subjective: aiSource?.subjective || "",
+          objective_note: objectiveNote,
+          assessment,
+          plan,
+        }),
       });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("Sign note failed:", errorText);
+        showToast("error", "Failed to submit SOAP note.");
+        return;
+      }
+
+      showToast("success", "SOAP note submitted and stored successfully.");
       setAssessment("");
       setPlan("");
       setObjectiveNote("");
@@ -442,13 +495,34 @@ export default function LiveTriage() {
       fetchData();
     } catch (e) {
       console.error(e);
+      showToast("error", "Error submitting SOAP note.");
     }
   };
 
   const handleCancelEncounter = async () => {
-    // Return to waiting status
+    const encounterId = selectedSessionId || selectedEncounter?.id;
+    if (encounterId) {
+      try {
+        const token = await getToken();
+        await fetch(`${API}/api/triage/override/${encounterId}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ status: "Waiting for Doctor" }),
+        });
+      } catch (error) {
+        console.error("Cancel encounter failed:", error);
+      }
+    }
+
     setViewMode("queue");
     setSelectedSessionId(null);
+    setAssessment("");
+    setPlan("");
+    setObjectiveNote("");
+    fetchData();
   };
 
   const handleGenerateSoap = async (overrideObjective?: string) => {
@@ -725,26 +799,38 @@ export default function LiveTriage() {
     Math.round((data.queue_active / 20) * 100),
   );
 
-  const chartData = [
-    { time: "08:00", utilization: 45 },
-    { time: "10:00", utilization: 85 },
-    { time: "12:00", utilization: 60 },
-    { time: "14:00", utilization: 92 },
-    { time: "16:00", utilization: 75 },
-    { time: "Now", utilization: currentUtilization },
-  ];
+  const chartData =
+    utilizationHistory.length > 0
+      ? utilizationHistory
+      : [
+          { time: "08:00", utilization: 45 },
+          { time: "10:00", utilization: 85 },
+          { time: "12:00", utilization: 60 },
+          { time: "14:00", utilization: 92 },
+          { time: "16:00", utilization: 75 },
+          { time: "Now", utilization: currentUtilization },
+        ];
 
-  // const triageData = [
-  //   { name: "Self-Care", value: 35, color: "#9ca3af" },
-  //   { name: "GP Clinic", value: 45, color: "#60a5fa" },
-  //   { name: "Specialist", value: 15, color: "var(--primary)" },
-  //   { name: "Emergency", value: 5, color: "#ba1a1a" },
-  // ];
+  const totalPatients = data.patients?.length || 0;
+  const routedPatients =
+    data.patients?.filter(
+      (p: any) =>
+        p.assigned_doctor &&
+        p.assigned_doctor !== "Unassigned" &&
+        p.department &&
+        p.department !== "Triage Queue",
+    ).length || 0;
+  const conversionPercent = totalPatients
+    ? Math.round((routedPatients / totalPatients) * 100)
+    : 0;
 
   const triageData = [
-    { name: "Correctly Routed", value: 65, color: "#60a5fa" },
-    { name: "Reassigned", value: 25, color: "#9ca3af" },
-    { name: "Dropped / No Show", value: 10, color: "#ef4444" },
+    { name: "AI routed", value: conversionPercent, color: "#60a5fa" },
+    {
+      name: "Awaiting routing",
+      value: Math.max(0, 100 - conversionPercent),
+      color: "#9ca3af",
+    },
   ];
 
   // =========================
@@ -753,15 +839,23 @@ export default function LiveTriage() {
   // Build dynamic staff data from board
   const staffData =
     board?.departments.map((dept: any) => {
-      const totalDoctors = dept.metrics?.doctors_total || 0;
+      const totalDoctors = dept.doctors?.length || dept.metrics?.doctors_total || 0;
+      const busyRoomsCount =
+        dept.metrics?.doctors_in_consult ??
+        (dept.rooms || []).reduce((count: number, r: any) => {
+          return count + (r.in_consult && r.in_consult.length > 0 ? 1 : 0);
+        }, 0);
 
-      // Doctors currently busy (in consult)
-      const busyDoctors = (dept.rooms || []).filter(
-        (r: any) => r.in_consult && r.in_consult.length > 0,
-      ).length;
+      const busyPatientCount =
+        data?.patients?.filter(
+          (p: any) =>
+            p.status === "In Consult" &&
+            String(p.department || "").toLowerCase() ===
+              String(dept.name || "").toLowerCase(),
+        ).length || 0;
 
-      // Available doctors = total - busy
-      const availableDoctors = totalDoctors - busyDoctors;
+      const busyCount = Math.max(busyRoomsCount, busyPatientCount);
+      const availableDoctors = Math.max(totalDoctors - busyCount, 0);
 
       return {
         label: dept.name,

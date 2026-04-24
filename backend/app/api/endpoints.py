@@ -156,7 +156,11 @@ class ExtendedOverrideRequest(BaseModel):
 
 
 class SignNoteRequest(BaseModel):
-    assessment_plan: str
+    assessment_plan: str | None = None
+    subjective: str | None = None
+    objective_note: str | None = None
+    assessment: str | None = None
+    plan: str | None = None
 
 
 class GenerateSoapRequest(BaseModel):
@@ -600,6 +604,30 @@ async def override_patient(patient_id: str, req: OverridePatientRequest, user_id
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to override patient: {str(e)}")
 
+@router.post("/api/triage/auto_assign/{patient_id}")
+async def auto_assign_patient(patient_id: str, user_id: str = Depends(verify_clerk_token)):
+    try:
+        uid = user_id.get("sub")
+        hospital_id = await _get_hospital_id(uid)
+        if not hospital_id:
+            raise HTTPException(403, "No hospital assigned")
+
+        async with AsyncSessionLocal() as db:
+            assignment = await CareFlowService.auto_assign_patient(db, uuid.UUID(patient_id), hospital_id)
+            if not assignment:
+                raise HTTPException(500, "Auto-assignment failed")
+            return {"success": True, "assignment": assignment}
+    except ValueError as e:
+        print(f"ERROR: [auto_assign_patient] Invalid UUID: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid patient ID format: {e}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"ERROR: [auto_assign_patient] {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to auto-assign patient: {str(e)}")
+
 @router.post("/api/admin/departments")
 async def add_department(req: NewDepartmentBody, user_id: str = Depends(verify_clerk_token)):
     h_id = await _get_hospital_id(user_id.get("sub"))
@@ -797,7 +825,19 @@ async def generate_soap_note(session_id: str, req: GenerateSoapRequest, user_id:
 @router.post("/api/triage/sign_note/{session_id}")
 async def sign_note_v2(session_id: str, req: SignNoteRequest, user_id: str = Depends(verify_clerk_token)):
     async with AsyncSessionLocal() as db:
-        await CareFlowService.sign_note(db, uuid.UUID(session_id), req.assessment_plan)
+        ok = await CareFlowService.sign_note(
+            db,
+            uuid.UUID(session_id),
+            clinical_note=req.assessment_plan or "",
+            soap_note={
+                "subjective": req.subjective or "",
+                "objective": req.objective_note or "",
+                "assessment": req.assessment or "",
+                "plan": req.plan or "",
+            },
+        )
+        if not ok:
+            raise HTTPException(status_code=500, detail="Failed to persist signed SOAP note")
         return {"status": "success"}
 
 

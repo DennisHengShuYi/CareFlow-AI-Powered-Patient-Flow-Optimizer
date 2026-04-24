@@ -252,6 +252,159 @@ class CareFlowService:
             return False
 
     @staticmethod
+    async def auto_assign_patient(db: AsyncSession, session_id: uuid.UUID, hospital_id: uuid.UUID):
+        """Auto-assign the best department and available doctor based on chief complaint."""
+        try:
+            session_records = await supabase_rest.query_table(
+                "sessions",
+                {
+                    "id": f"eq.{session_id}",
+                    "select": "*,triage_result"
+                }
+            )
+            if not session_records:
+                return None
+
+            session_data = session_records[0]
+            triage_result = session_data.get("triage_result") or {}
+            complaint = triage_result.get("summary") or triage_result.get("chief_complaint") or "No chief complaint provided"
+            recommended_specialist = (triage_result.get("recommended_specialist") or "").strip()
+
+            departments = await supabase_rest.query_table(
+                "departments",
+                {"hospital_id": f"eq.{hospital_id}", "select": "*"}
+            ) or []
+            doctors = await supabase_rest.query_table(
+                "doctors",
+                {"hospital_id": f"eq.{hospital_id}", "select": "*"}
+            ) or []
+            active_sessions = await supabase_rest.query_table(
+                "sessions",
+                {
+                    "hospital_id": f"eq.{hospital_id}",
+                    "status": "neq.signed",
+                    "select": "doctor_id,status"
+                }
+            ) or []
+
+            busy_doctor_ids = {
+                str(session.get("doctor_id"))
+                for session in active_sessions
+                if session.get("doctor_id") and session.get("status") in IN_ROOM_STATUSES
+            }
+            available_doctors = [doc for doc in doctors if str(doc.get("id")) not in busy_doctor_ids]
+            if not available_doctors:
+                available_doctors = doctors
+
+            department_list = [
+                {"id": str(dept["id"]), "name": dept["name"]}
+                for dept in departments
+            ]
+            doctor_list = [
+                {
+                    "id": str(doc["id"]),
+                    "name": doc["full_name"],
+                    "department_id": str(doc["department_id"]) if doc.get("department_id") else None,
+                    "specialty": doc.get("specialty") or "",
+                }
+                for doc in available_doctors
+            ]
+
+            if not department_list or not doctor_list:
+                return None
+
+            system = (
+                "You are an expert clinical assignment assistant for a hospital triage workflow. "
+                "Choose the best department and available doctor for a patient based on the chief complaint and recommended specialist. "
+                "Return ONLY a JSON object with keys: department_name, doctor_name, reasoning." 
+                "Do not include any additional text."
+            )
+
+            prompt = (
+                f"Chief complaint: {complaint}\n"
+                f"Recommended specialist: {recommended_specialist or 'Not available'}\n"
+                "Departments:\n"
+                + "\n".join([f"- {dept['name']}" for dept in department_list])
+                + "\nAvailable doctors:\n"
+                + "\n".join([
+                    f"- {doc['name']} (dept: {next((d['name'] for d in department_list if d['id'] == doc['department_id']), 'Unknown')}, specialty: {doc['specialty']})"
+                    for doc in doctor_list
+                ])
+                + "\n\nChoose the most suitable department and doctor for this patient." 
+            )
+
+            raw = await llm.generate(prompt, system, response_format="json")
+            assignment = None
+            if isinstance(raw, str):
+                try:
+                    assignment = json.loads(raw)
+                except json.JSONDecodeError:
+                    import re
+                    match = re.search(r"\{.*\}", raw, re.S)
+                    if match:
+                        assignment = json.loads(match.group(0))
+            elif isinstance(raw, dict):
+                assignment = raw
+
+            if not assignment:
+                return None
+
+            department_name = (assignment.get("department_name") or "").strip()
+            doctor_name = (assignment.get("doctor_name") or "").strip()
+            reasoning = assignment.get("reasoning") or assignment.get("reason") or ""
+
+            def find_department(name: str):
+                if not name:
+                    return None
+                lower_name = name.lower()
+                for dept in department_list:
+                    if lower_name == dept["name"].lower() or lower_name in dept["name"].lower() or dept["name"].lower() in lower_name:
+                        return dept
+                if recommended_specialist:
+                    lower_specialist = recommended_specialist.lower()
+                    for dept in department_list:
+                        if lower_specialist in dept["name"].lower() or dept["name"].lower() in lower_specialist:
+                            return dept
+                return None
+
+            chosen_department = find_department(department_name) or find_department(recommended_specialist) or department_list[0]
+
+            def find_doctor(name: str, dept_id: Optional[str]):
+                if name:
+                    lower_name = name.lower()
+                    for doc in doctor_list:
+                        if lower_name == doc["name"].lower() or lower_name in doc["name"].lower() or doc["name"].lower() in lower_name:
+                            return doc
+                if dept_id:
+                    for doc in doctor_list:
+                        if doc.get("department_id") == dept_id:
+                            return doc
+                return doctor_list[0]
+
+            chosen_doctor = find_doctor(doctor_name, chosen_department["id"] if chosen_department else None)
+
+            update_data = {"status": "In Consult"}
+            if chosen_department:
+                update_data["department_id"] = chosen_department["id"]
+            if chosen_doctor:
+                update_data["doctor_id"] = chosen_doctor["id"]
+
+            result = await supabase_rest.update_table("sessions", str(session_id), update_data)
+            if not result:
+                return None
+
+            return {
+                "department_name": chosen_department["name"],
+                "doctor_name": chosen_doctor["name"],
+                "department_id": chosen_department["id"],
+                "doctor_id": chosen_doctor["id"],
+                "reasoning": reasoning,
+            }
+        except Exception as e:
+            print(f"ERROR in auto_assign_patient: {e}")
+            return None
+
+    @staticmethod
     async def add_department(db: AsyncSession, hospital_id: uuid.UUID, name: str, specialty_code: str = ""):
         """Create a new department via REST API."""
         try:
@@ -399,15 +552,37 @@ class CareFlowService:
         return True
 
     @staticmethod
-    async def sign_note(db: AsyncSession, session_id: uuid.UUID, clinical_note: str):
+    async def sign_note(db: AsyncSession, session_id: uuid.UUID, clinical_note: str | None = None, soap_note: dict | None = None):
         """Sign off an encounter and move it to history."""
-        stmt = update(TriageSession).where(TriageSession.id == session_id).values(
-            status="signed",
-            triage_result=TriageSession.triage_result.concat({"clinical_note": clinical_note})
-        )
-        await db.execute(stmt)
-        await db.commit()
-        return True
+        try:
+            session_data = await supabase_rest.query_table(
+                "sessions",
+                {
+                    "id": f"eq.{session_id}",
+                    "select": "triage_result"
+                }
+            )
+            existing_triage = {}
+            if session_data and isinstance(session_data, list) and len(session_data) > 0:
+                existing_triage = session_data[0].get("triage_result") or {}
+
+            payload = {}
+            if clinical_note is not None:
+                payload["clinical_note"] = clinical_note
+            if soap_note:
+                payload["soap_note"] = soap_note
+
+            merged_triage = {**existing_triage, **payload}
+            update_data = {
+                "status": "signed",
+                "triage_result": merged_triage,
+            }
+
+            result = await supabase_rest.update_table("sessions", str(session_id), update_data)
+            return result is not None
+        except Exception as e:
+            print(f"ERROR in sign_note: {e}")
+            return False
 
     @staticmethod
     async def generate_soap_note(db: AsyncSession, session_id: uuid.UUID, objective_note: str = ""):
