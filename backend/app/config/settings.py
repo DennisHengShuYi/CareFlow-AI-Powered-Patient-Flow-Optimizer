@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     SUPABASE_URL: str = Field(default="", alias="VITE_SUPABASE_URL")
     SUPABASE_SERVICE_ROLE_KEY: str = ""
 
+    # Email Configuration
+    EMAIL_USER: str = ""
+    EMAIL_PASSWORD: str = ""
+
     model_config = SettingsConfigDict(
         env_file=str(ENV_PATH),
         env_file_encoding="utf-8",

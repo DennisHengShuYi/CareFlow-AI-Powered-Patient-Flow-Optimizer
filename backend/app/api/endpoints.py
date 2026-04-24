@@ -19,6 +19,7 @@ import os
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, Form
 from fastapi.responses import JSONResponse
+import httpx
 from pydantic import BaseModel
 from sqlalchemy import text, select, and_, func
 
@@ -1691,8 +1692,10 @@ async def initiate_gl_request(case_id: str, body: dict):
         """
         
         # 3. Real Email Sending logic
-        sender_email = os.getenv("EMAIL_USER")
-        sender_password = os.getenv("EMAIL_PASSWORD")
+        sender_email = settings.EMAIL_USER
+        sender_password = settings.EMAIL_PASSWORD
+
+        print(f"[INITIATE] Attempting to send email. Sender: {sender_email}")
 
         if sender_email and sender_password:
             try:
@@ -1704,21 +1707,28 @@ async def initiate_gl_request(case_id: str, body: dict):
                 msg.attach(MIMEText(email_body, 'plain'))
 
                 # Download PDF to attach
-                async with httpx.AsyncClient() as client:
+                async with httpx.AsyncClient(timeout=30.0) as client:
                     resp = await client.get(doc_url)
                     if resp.status_code == 200:
                         part = MIMEApplication(resp.content, Name=f"{claim_type}_Request_{case_id}.pdf")
                         part['Content-Disposition'] = f'attachment; filename="{claim_type}_Request_{case_id}.pdf"'
                         msg.attach(part)
+                    else:
+                        print(f"[INITIATE ERROR] Failed to download PDF for attachment. URL: {doc_url}")
 
                 # Send
-                with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+                print(f"[INITIATE] Connecting to smtp.gmail.com:587 (STARTTLS)...")
+                with smtplib.SMTP("smtp.gmail.com", 587) as server:
+                    server.starttls() # Secure the connection
                     server.login(sender_email, sender_password)
                     server.send_message(msg)
-                print(f"[INITIATE] Real email sent to {insurance_email}")
+                print(f"[INITIATE] Real email successfully sent to {insurance_email}")
+            except smtplib.SMTPAuthenticationError:
+                print(f"[INITIATE MAIL ERROR] Authentication failed. This usually means the 'App Password' is incorrect or missing. Ensure you are using a 16-character code from Google Security settings.")
             except Exception as mail_err:
                 print(f"[INITIATE MAIL ERROR] {mail_err}")
-                # We don't raise here so the DB still updates, but we log it
+                import traceback
+                traceback.print_exc()
         else:
             print(f"--- SIMULATED EMAIL SENT (Missing Credentials) ---")
             print(f"To: {insurance_email}")
