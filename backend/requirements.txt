@@ -20,3 +20,4 @@ Pillow==10.4.0
 python-multipart==0.0.12
 supabase
 openai==1.45.0
+reportlab==4.0.10

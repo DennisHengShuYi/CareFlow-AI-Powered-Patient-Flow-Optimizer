@@ -31,6 +31,12 @@ interface Case {
   medicalBillPrice?: number;
   billUrl?: string;
   doctorDiagnosis?: string;
+  diagnosisPdfUrl?: string;
+  confidenceScore?: number;
+  aiReasoning?: string;
+  generatedDocUrl?: string;
+  claimType?: string;
+  workflowStatus?: string;
 }
 
 interface Patient {
@@ -42,6 +48,7 @@ interface Patient {
   insurers: string[];
   cases: Case[];
   type: 'inpatient' | 'outpatient' | 'emergency';
+  policy_url?: string;
 }
 
 const HOSPITAL_DEPARTMENTS = [
@@ -106,7 +113,13 @@ const fetchPatients = async (): Promise<Patient[]> => {
         totalBill: typeof c.medical_bill_price === 'number' ? c.medical_bill_price : parseFloat(c.medical_bill_price || '0'),
         hasMedicalBill: c.has_medical_bill ?? false,
         billUrl: c.bill_url,
-        doctorDiagnosis: c.doctor_diagnosis
+        doctorDiagnosis: c.doctor_diagnosis,
+        diagnosisPdfUrl: c.diagnosis_pdf_url,
+        confidenceScore: c.confidence_score,
+        aiReasoning: c.ai_reasoning,
+        generatedDocUrl: c.generated_doc_url,
+        claimType: c.claim_type,
+        workflowStatus: c.workflow_status
       }));
       return {
         id: p.id,
@@ -115,6 +128,7 @@ const fetchPatients = async (): Promise<Patient[]> => {
         caseCount: cases.length,
         diagnoses: p.diagnoses ?? [],
         insurers: p.insurers ?? [],
+        policy_url: p.policy_url ?? undefined,
         type, // ✅ use group key, not p.category (often null)
         cases
       };
@@ -147,6 +161,9 @@ export default function Patients() {
   const [isEditPatientModalOpen, setIsEditPatientModalOpen] = useState(false);
   const [editPatientName, setEditPatientName] = useState('');
   const [editPatientInsurers, setEditPatientInsurers] = useState('');
+  const [editPolicyFile, setEditPolicyFile] = useState<File | null>(null);
+  const [isPolicyUploading, setIsPolicyUploading] = useState(false);
+  const [policyUploadSuccess, setPolicyUploadSuccess] = useState(false);
 
   // Edit Case State
   const [isEditCaseModalOpen, setIsEditCaseModalOpen] = useState(false);
@@ -216,6 +233,8 @@ export default function Patients() {
     setError(null);
     try {
       const token = localStorage.getItem('token');
+
+      // 1. Update name + insurers
       const response = await fetch(`${API}/api/patients/${selectedPatientId}`, {
         method: 'PATCH',
         headers: {
@@ -228,10 +247,29 @@ export default function Patients() {
         })
       });
       if (!response.ok) throw new Error('Failed to update patient');
+
+      // 2. Upload policy PDF if one was selected
+      if (editPolicyFile) {
+        setIsPolicyUploading(true);
+        const formData = new FormData();
+        formData.append('file', editPolicyFile);
+        const policyRes = await fetch(`${API}/api/patients/${selectedPatientId}/policy`, {
+          method: 'POST',
+          headers: { 'Authorization': token ? `Bearer ${token}` : '' },
+          body: formData
+        });
+        setIsPolicyUploading(false);
+        if (!policyRes.ok) throw new Error('Patient info saved, but policy PDF upload failed.');
+        setPolicyUploadSuccess(true);
+        setTimeout(() => setPolicyUploadSuccess(false), 3000);
+      }
+
       setIsEditPatientModalOpen(false);
+      setEditPolicyFile(null);
       refreshPatients();
     } catch (err: any) {
       setError(err.message);
+      setIsPolicyUploading(false);
     } finally {
       setIsSubmitting(false);
     }
@@ -361,8 +399,17 @@ export default function Patients() {
               navigate('/claims', { 
                 state: { 
                   patientName: p.name,
+                  patientId: p.id,
+                  caseId: c.id,
                   diagnosis: c.doctorDiagnosis || 'Pending Diagnosis',
+                  diagnosisPdfUrl: c.diagnosisPdfUrl,
+                  confidenceScore: c.confidenceScore,
+                  aiReasoning: c.aiReasoning,
+                  generatedDocUrl: c.generatedDocUrl,
+                  claimType: c.claimType,
+                  workflowStatus: c.workflowStatus,
                   insurers: p.insurers,
+                  policyUrl: p.policy_url,
                   billUrl: c.billUrl,
                   billPrice: c.totalBill
                 } 
@@ -571,6 +618,24 @@ export default function Patients() {
                         : <span style={{ opacity: 0.6, fontSize: '0.875rem' }}>None on record</span>
                       }
                     </div>
+                  </div>
+                  <div style={{ marginBottom: '1rem' }}>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.8, textTransform: 'uppercase', marginBottom: '0.5rem' }}>Insurance Policy</div>
+                    {selectedPatient.policy_url ? (
+                      <button
+                        onClick={() => window.open(selectedPatient.policy_url, '_blank')}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '6px',
+                          backgroundColor: 'rgba(255,255,255,0.2)', border: '1px solid rgba(255,255,255,0.4)',
+                          color: 'white', padding: '6px 14px', borderRadius: '8px',
+                          fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer'
+                        }}
+                      >
+                        <FileText size={14} /> View Policy PDF
+                      </button>
+                    ) : (
+                      <span style={{ opacity: 0.6, fontSize: '0.875rem' }}>No policy on file</span>
+                    )}
                   </div>
                   <div>
                     <div style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.8, textTransform: 'uppercase', marginBottom: '0.5rem' }}>Primary Diagnosis</div>
@@ -884,23 +949,74 @@ export default function Patients() {
           alignItems: 'center', justifyContent: 'center', zIndex: 1000,
           backdropFilter: 'blur(4px)'
         }}>
-          <div className="card" style={{ width: '100%', maxWidth: '500px', padding: '2rem' }}>
+          <div className="card" style={{ width: '100%', maxWidth: '520px', padding: '2rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
               <h3 style={{ fontSize: '1.5rem', fontWeight: 800 }}>Edit Patient Info</h3>
-              <button onClick={() => setIsEditPatientModalOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={24} /></button>
+              <button onClick={() => { setIsEditPatientModalOpen(false); setEditPolicyFile(null); setError(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={24} /></button>
             </div>
             <form onSubmit={handleUpdatePatient}>
-              <div style={{ marginBottom: '1.5rem' }}>
+              {/* Name */}
+              <div style={{ marginBottom: '1.25rem' }}>
                 <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, marginBottom: '0.5rem', color: 'var(--text-muted)' }}>FULL NAME</label>
                 <input type="text" required value={editPatientName} onChange={e => setEditPatientName(e.target.value)} style={{ width: '100%', padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--neutral-400)' }} />
               </div>
-              <div style={{ marginBottom: '2rem' }}>
+              {/* Insurers */}
+              <div style={{ marginBottom: '1.25rem' }}>
                 <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, marginBottom: '0.5rem', color: 'var(--text-muted)' }}>INSURERS (comma separated)</label>
                 <input type="text" value={editPatientInsurers} onChange={e => setEditPatientInsurers(e.target.value)} placeholder="e.g. Allianz, AIA" style={{ width: '100%', padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--neutral-400)' }} />
               </div>
+              {/* Policy PDF */}
+              <div style={{ marginBottom: '1.75rem' }}>
+                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, marginBottom: '0.5rem', color: 'var(--text-muted)' }}>INSURANCE POLICY PDF (optional)</label>
+                <div style={{
+                  border: `2px dashed ${editPolicyFile ? 'var(--primary)' : 'var(--neutral-400)'}`,
+                  padding: '1.5rem', borderRadius: '12px', textAlign: 'center',
+                  cursor: 'pointer', backgroundColor: editPolicyFile ? 'var(--primary-fixed)' : 'var(--neutral-100)',
+                  position: 'relative', transition: 'all 0.2s'
+                }}>
+                  <UploadCloud size={28} color={editPolicyFile ? 'var(--primary)' : 'var(--text-muted)'} style={{ marginBottom: '0.4rem' }} />
+                  <div style={{ fontSize: '0.85rem', fontWeight: 600, color: editPolicyFile ? 'var(--primary)' : 'var(--text-main)' }}>
+                    {editPolicyFile ? editPolicyFile.name : 'Click to select PDF'}
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>PDF only · max 10 MB</div>
+                  {selectedPatient?.policy_url && !editPolicyFile && (
+                    <div style={{ fontSize: '0.75rem', color: 'var(--primary)', marginTop: '6px', fontWeight: 600 }}>
+                      ✓ Policy already on file — upload to replace
+                    </div>
+                  )}
+                  <input
+                    type="file"
+                    accept="application/pdf"
+                    onChange={e => setEditPolicyFile(e.target.files ? e.target.files[0] : null)}
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
+                  />
+                </div>
+              </div>
+              {/* Error */}
+              {error && (
+                <div style={{ marginBottom: '1rem', color: '#ef5350', fontSize: '0.85rem', fontWeight: 600 }}>{error}</div>
+              )}
+              {/* Actions */}
               <div style={{ display: 'flex', gap: '1rem' }}>
-                <button type="button" onClick={() => setIsEditPatientModalOpen(false)} style={{ flex: 1, padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--neutral-400)', background: 'white', fontWeight: 700 }}>Cancel</button>
-                <button type="submit" disabled={isSubmitting} style={{ flex: 1, padding: '0.75rem', borderRadius: '10px', border: 'none', backgroundColor: 'var(--primary)', color: 'white', fontWeight: 700 }}>{isSubmitting ? <Loader2 className="animate-spin" /> : 'Save Changes'}</button>
+                <button
+                  type="button"
+                  onClick={() => { setIsEditPatientModalOpen(false); setEditPolicyFile(null); setError(null); }}
+                  style={{ flex: 1, padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--neutral-400)', background: 'white', fontWeight: 700 }}
+                >Cancel</button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting || isPolicyUploading}
+                  style={{
+                    flex: 1, padding: '0.75rem', borderRadius: '10px', border: 'none',
+                    backgroundColor: 'var(--primary)', color: 'white', fontWeight: 700,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
+                    cursor: (isSubmitting || isPolicyUploading) ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  {isPolicyUploading ? <><Loader2 size={16} className="animate-spin" /> Uploading PDF...</> :
+                   isSubmitting ? <><Loader2 size={16} className="animate-spin" /> Saving...</> :
+                   'Save Changes'}
+                </button>
               </div>
             </form>
           </div>

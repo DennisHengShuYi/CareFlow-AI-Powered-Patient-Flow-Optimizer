@@ -10,6 +10,12 @@ import re
 import time
 import uuid
 from datetime import datetime, timezone
+import asyncio
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
+import os
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, Form
 from fastapi.responses import JSONResponse
@@ -126,36 +132,36 @@ async def _get_patient_payload(db, archived: bool = False):
 # async def get_archives():
 #     async with AsyncSessionLocal() as db:
 #         return await _get_patient_payload(db, archived=True)
-# async def _log_intake(
-#     session_id: str,
-#     user_id: str,
-#     turn_number: int,
-#     user_prompt: str,
-#     triage_result: dict,
-#     ai_reply: str | None,
-#     input_channel: str = "text"
-# ) -> None:
-#     if "[password]" in settings.DATABASE_URL:
-#         return
+async def _log_intake(
+    session_id: str,
+    user_id: str,
+    turn_number: int,
+    user_prompt: str,
+    triage_result: dict,
+    ai_reply: str | None,
+    input_channel: str = "text"
+) -> None:
+    if "[password]" in settings.DATABASE_URL:
+        return
         
-#     try:
-#         async with AsyncSessionLocal() as db:
-#             log = IntakeLog(
-#                 session_id=session_id,
-#                 clerk_user_id=user_id,
-#                 turn_number=turn_number,
-#                 user_prompt=user_prompt,
-#                 ai_triage_result=triage_result,
-#                 ai_reply=ai_reply,
-#                 urgency_score=triage_result.get("urgency_score"),
-#                 recommended_specialist=triage_result.get("recommended_specialist"),
-#                 confidence=triage_result.get("confidence"),
-#                 input_channel=input_channel,
-#             )
-#             db.add(log)
-#             await db.commit()
-#     except Exception as e:
-#         print(f"DEBUG: Intake log failed, bypassing: {e}")
+    try:
+        async with AsyncSessionLocal() as db:
+            log = IntakeLog(
+                session_id=session_id,
+                clerk_user_id=user_id,
+                turn_number=turn_number,
+                user_prompt=user_prompt,
+                ai_triage_result=triage_result,
+                ai_reply=ai_reply,
+                urgency_score=triage_result.get("urgency_score"),
+                recommended_specialist=triage_result.get("recommended_specialist"),
+                confidence=triage_result.get("confidence"),
+                input_channel=input_channel,
+            )
+            db.add(log)
+            await db.commit()
+    except Exception as e:
+        print(f"DEBUG: Intake log failed, bypassing: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -1068,6 +1074,13 @@ async def sign_note_v2(session_id: str, req: SignNoteRequest, user_id: str = Dep
         await CareFlowService.sign_note(db, uuid.UUID(session_id), req.assessment_plan)
         return {"status": "success"}
 
+@router.post("/api/orchestration/run")
+async def run_orchestration(body: dict):
+    """Trigger manual orchestration run (e.g. for specific case debugging)."""
+    case_id = body.get("case_id")
+    # Logic to fetch data, run triage/analysis, and update redis keys
+    return {"status": "initiated", "case_id": case_id}
+
 
 # ---------------------------------------------------------------------------
 # GET /health
@@ -1117,7 +1130,7 @@ async def get_active_patients():
         response = await supabase_rest.query_table(
             "patients",
             {
-                "select": "id, full_name, age, category, status, insurers, medical_cases(id, title, department, status, workflow_status, has_medical_bill, medical_bill_price, doctor_diagnosis, created_at, medical_bills(file_url, total_bill, case_id))",
+                "select": "id, full_name, age, category, status, insurers, policy_url, medical_cases(id, title, department, status, workflow_status, has_medical_bill, medical_bill_price, doctor_diagnosis, diagnosis_pdf_url, generated_doc_url, claim_type, created_at, medical_bills(file_url, total_bill, case_id))",
                 "status": "eq.active",
                 "order": "created_at.desc"
             }
@@ -1137,6 +1150,8 @@ async def get_active_patients():
                 "age": p.get("age"),
                 "category": p.get("category"),
                 "insurers": p.get("insurers") or [],
+                "policy_url": p.get("policy_url"),
+                "type": p.get("category", "outpatient"),
                 # This matches your UI where cases appear under the patient
                 "cases": [
                     {
@@ -1148,6 +1163,9 @@ async def get_active_patients():
                           "has_medical_bill": c.get("has_medical_bill"),
                           "medical_bill_price": c.get("medical_bill_price"),
                           "doctor_diagnosis": c.get("doctor_diagnosis"),
+                          "diagnosis_pdf_url": c.get("diagnosis_pdf_url"),
+                          "generated_doc_url": c.get("generated_doc_url"),
+                          "claim_type": c.get("claim_type"),
                           "bill_url": next((b.get("file_url") for b in c.get("medical_bills", []) if b.get("case_id") == c.get("id")), 
                                           c.get("medical_bills", [{}])[0].get("file_url") if c.get("medical_bills") else None),
                           "created_at": c.get("created_at")
@@ -1156,6 +1174,16 @@ async def get_active_patients():
                 ]
             }
             
+            # Check Redis for transient orchestration results
+            for case in clean_patient["cases"]:
+                cache = await redis_client.get_json(f"orchestration:{case['id']}")
+                if cache:
+                    case["confidence_score"] = cache.get("score", 0)
+                    case["ai_reasoning"] = cache.get("reasoning", "")
+                else:
+                    case["confidence_score"] = 0
+                    case["ai_reasoning"] = None
+
             # Use the Case Titles as "Diagnoses" for the UI summary for now
             clean_patient["diagnoses"] = [c["title"] for c in clean_patient["cases"]]
 
@@ -1302,6 +1330,410 @@ async def update_patient_info(patient_id: str, body: UpdatePatientRequest):
         
     except Exception as e:
         print(f"[PATIENT_UPDATE] ERROR: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/patients/{patient_id}/policy")
+async def upload_patient_policy(
+    patient_id: str,
+    file: UploadFile = File(...)
+):
+    """
+    Upload an insurance policy PDF for a patient.
+    Stores in Supabase Storage bucket 'insurance_policies' and
+    saves the public URL back to patients.policy_url.
+    """
+    try:
+        print(f"[POLICY_UPLOAD] Uploading policy PDF for patient {patient_id}")
+
+        if file.content_type not in ("application/pdf", "application/octet-stream"):
+            # Allow any file but warn if not PDF
+            print(f"[POLICY_UPLOAD] WARN: content_type is {file.content_type}, expected PDF")
+
+        file_content = await file.read()
+        file_ext = file.filename.split(".")[-1] if file.filename and "." in file.filename else "pdf"
+        storage_path = f"policies/{patient_id}_{int(time.time())}.{file_ext}"
+
+        # Upload to Supabase Storage bucket 'insurance_policies'
+        upload_res = await supabase_rest.upload_file(
+            "insurance_policies",
+            storage_path,
+            file_content,
+            file.content_type or "application/pdf"
+        )
+
+        if not upload_res:
+            raise HTTPException(status_code=500, detail="Failed to upload file to Supabase Storage")
+
+        # Build the public URL
+        file_url = f"{supabase_rest.url}/storage/v1/object/public/insurance_policies/{storage_path}"
+
+        # Persist URL back to the patients row
+        update_res = await supabase_rest.update_table(
+            "patients",
+            {"policy_url": file_url},
+            {"id": f"eq.{patient_id}"}
+        )
+
+        if update_res is None:
+            raise HTTPException(status_code=500, detail="File uploaded but failed to save URL to patient record")
+
+        print(f"[POLICY_UPLOAD] Success: {file_url}")
+        return {"success": True, "policy_url": file_url}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[POLICY_UPLOAD] ERROR: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/cases/{case_id}/supporting-doc")
+async def upload_supporting_doc(
+    case_id: str,
+    file: UploadFile = File(...),
+    label: str = Form(default="Supporting Document")
+):
+    """
+    Upload any supporting document (PDF, image, etc.) for a case.
+    Stores in Supabase Storage bucket 'insurance_policies' under supporting/<case_id>/ path.
+    Returns the public URL — the caller is responsible for tracking labels/URLs.
+    """
+    try:
+        print(f"[SUPPORT_DOC] Uploading '{label}' for case {case_id}")
+        file_content = await file.read()
+        file_ext = file.filename.split(".")[-1] if file.filename and "." in file.filename else "pdf"
+        storage_path = f"supporting/{case_id}/{int(time.time())}_{label.replace(' ', '_')}.{file_ext}"
+
+        upload_res = await supabase_rest.upload_file(
+            "insurance_policies",
+            storage_path,
+            file_content,
+            file.content_type or "application/pdf"
+        )
+
+        if not upload_res:
+            raise HTTPException(status_code=500, detail="Failed to upload file to Supabase Storage")
+
+        file_url = f"{supabase_rest.url}/storage/v1/object/public/insurance_policies/{storage_path}"
+        print(f"[SUPPORT_DOC] Success: {file_url}")
+        return {"success": True, "label": label, "url": file_url, "filename": file.filename}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[SUPPORT_DOC] ERROR: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/cases/{case_id}/soap-diagnosis")
+async def generate_soap_diagnosis(case_id: str, body: dict):
+    """
+    1. Takes raw diagnosis text.
+    2. Uses LLM to structure into SOAP format.
+    3. Generates a PDF using reportlab.
+    4. Uploads to Supabase Storage.
+    5. Updates medical_cases.diagnosis_pdf_url.
+    """
+    diagnosis_text = body.get("diagnosis_text")
+    if not diagnosis_text:
+        raise HTTPException(status_code=400, detail="Missing diagnosis_text")
+
+    try:
+        print(f"[SOAP] Generating SOAP for case {case_id}")
+        
+        # 1. LLM Transformation
+        system_prompt = "You are a clinical documentation specialist. Convert the input diagnosis note into a structured SOAP format (Subjective, Objective, Assessment, Plan). Be professional and concise."
+        soap_content = await llm.generate(diagnosis_text, system_prompt)
+
+        # 2. PDF Generation
+        from io import BytesIO
+        from reportlab.lib.pagesizes import LETTER
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet
+
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=LETTER)
+        styles = getSampleStyleSheet()
+        story = []
+
+        story.append(Paragraph(f"SOAP Medical Report - Case {case_id}", styles['Title']))
+        story.append(Spacer(1, 12))
+        
+        # Split content by lines and wrap in paragraphs
+        for line in soap_content.split('\n'):
+            if line.strip():
+                if any(header in line for header in ["Subjective:", "Objective:", "Assessment:", "Plan:"]):
+                    story.append(Paragraph(line, styles['Heading2']))
+                else:
+                    story.append(Paragraph(line, styles['Normal']))
+                story.append(Spacer(1, 6))
+
+        doc.build(story)
+        pdf_bytes = buffer.getvalue()
+        buffer.close()
+
+        # 3. Upload to Supabase
+        storage_path = f"soap/{case_id}_{int(time.time())}.pdf"
+        upload_res = await supabase_rest.upload_file(
+            "insurance_policies",
+            storage_path,
+            pdf_bytes,
+            "application/pdf"
+        )
+
+        if not upload_res:
+            raise HTTPException(status_code=500, detail="Failed to upload SOAP PDF")
+
+        file_url = f"{supabase_rest.url}/storage/v1/object/public/insurance_policies/{storage_path}"
+
+        # 4. Update Database
+        update_data = {
+            "doctor_diagnosis": diagnosis_text,
+            "diagnosis_pdf_url": file_url
+        }
+        await supabase_rest.update_table("medical_cases", update_data, {"id": f"eq.{case_id}"})
+
+        return {"success": True, "pdf_url": file_url, "soap_text": soap_content}
+
+    except Exception as e:
+        print(f"[SOAP ERROR] {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/cases/{case_id}/orchestrate")
+async def orchestrate_insurance_claim(case_id: str, body: dict):
+    """
+    AI Orchestrator:
+    1. Extracts text from Policy, Bill, Diagnosis, and Supporting Docs.
+    2. LLM Analysis: Returns extraction results, confidence score, and reasoning.
+    3. Caching: Stores score/reasoning in Redis.
+    4. Generation: Creates final PDFs via reportlab.
+    5. Persistence: Updates DB with claim_type and generated_doc_url.
+    """
+    claim_type = body.get("type") or "GL" # "GL" or "Claim"
+    try:
+        print(f"[ORCHESTRATE] Starting template-based orchestration for case {case_id} (Type: {claim_type})")
+        
+        # 1. Fetch Case and Patient data
+        case_res = await supabase_rest.query_table("medical_cases", {"select": "*, patients(*), medical_bills(*)", "id": f"eq.{case_id}"})
+        if not case_res:
+            raise HTTPException(status_code=404, detail="Case not found")
+        case_data = case_res[0]
+        patient_data = case_data.get("patients", {})
+        bill_data = case_data.get("medical_bills", [{}])[0]
+        
+        # 2. Extract Text from Source Docs (Diagnosis, Policy, Bill)
+        source_text = []
+        import httpx
+        import pdfplumber
+        from io import BytesIO
+
+        async def fetch_and_extract(url, label, target_list):
+            if not url: return
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.get(url)
+                    if resp.status_code == 200:
+                        with pdfplumber.open(BytesIO(resp.content)) as pdf:
+                            text = "\n".join(p.extract_text() or "" for p in pdf.pages)
+                            target_list.append(f"--- SOURCE: {label} ---\n{text}")
+            except Exception as e:
+                print(f"[ORCHESTRATE] Failed to extract {label}: {e}")
+
+        await asyncio.gather(
+            fetch_and_extract(patient_data.get("policy_url"), "Insurance Policy", source_text),
+            fetch_and_extract(case_data.get("diagnosis_pdf_url"), "SOAP Diagnosis", source_text),
+            fetch_and_extract(bill_data.get("file_url"), "Medical Bill", source_text)
+        )
+
+        # 3. Fetch Templates from insurance_templates bucket
+        templates_context = []
+        template_files = []
+        if claim_type == "GL":
+            template_files = ["Hospital Admission Form Template.pdf", "Medical Referral Letter Template Doc.pdf"]
+        else:
+            template_files = ["medical-claim-doctors-statement.pdf"]
+
+        for filename in template_files:
+            # Construct download URL (assuming public or we have access via rest client pattern)
+            url = f"{supabase_rest.url}/storage/v1/object/public/insurance_templates/{filename}"
+            await fetch_and_extract(url, f"TEMPLATE: {filename}", templates_context)
+
+        # 4. LLM Analysis & Form Filling
+        all_context = "\n\n".join(source_text + templates_context)
+        orchestration_prompt = f"""
+        You are a Medical Claims Specialist. 
+        TASK:
+        1. Analyze the SOURCE documents (Diagnosis, Bill, Policy).
+        2. Extract necessary fields (Patient Name, Policy No, ICD-10, Bill Total, etc.).
+        3. For EACH document in the TEMPLATE section, generate a "filled" version.
+        4. Preserve the exact headers and structure of the templates.
+        
+        Output format (JSON):
+        {{
+            "confidence_score": 0-100,
+            "reasoning": "Explain the score and if any template fields couldn't be filled",
+            "documents": [
+                {{
+                    "title": "Document Title",
+                    "content": "Full text of the filled document..."
+                }}
+            ]
+        }}
+        """
+        res_text = await llm.generate(all_context[:10000], orchestration_prompt, response_format="json")
+        res_data = json.loads(res_text)
+        
+        # 5. Cache Score and Reasoning
+        await redis_client.set_json(f"orchestration:{case_id}", {
+            "score": res_data.get("confidence_score", 0),
+            "reasoning": res_data.get("reasoning", "Generated based on templates.")
+        })
+
+        # 6. PDF Generation (ReportLab)
+        from reportlab.lib.pagesizes import LETTER
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+        from reportlab.lib.styles import getSampleStyleSheet
+        
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=LETTER)
+        styles = getSampleStyleSheet()
+        story = []
+
+        for idx, g_doc in enumerate(res_data.get("documents", [])):
+            if idx > 0:
+                story.append(PageBreak())
+            
+            story.append(Paragraph(g_doc.get("title", "Generated Form"), styles['Title']))
+            story.append(Spacer(1, 12))
+            
+            # Split content by lines and wrap in paragraphs
+            for line in g_doc.get("content", "").split('\n'):
+                if line.strip():
+                    # Basic bolding detection for "Key: Value" or "Header:"
+                    if ":" in line and len(line.split(":")[0]) < 30:
+                        parts = line.split(":", 1)
+                        story.append(Paragraph(f"<b>{parts[0]}:</b> {parts[1]}", styles['Normal']))
+                    else:
+                        story.append(Paragraph(line, styles['Normal']))
+                    story.append(Spacer(1, 6))
+
+        doc.build(story)
+        pdf_bytes = buffer.getvalue()
+        buffer.close()
+
+        # 7. Upload and Update
+        storage_path = f"generated/{case_id}_{claim_type.lower()}_{int(time.time())}.pdf"
+        await supabase_rest.upload_file("insurance_policies", storage_path, pdf_bytes, "application/pdf")
+        file_url = f"{supabase_rest.url}/storage/v1/object/public/insurance_policies/{storage_path}"
+
+        await supabase_rest.update_table("medical_cases", {
+            "claim_type": claim_type,
+            "generated_doc_url": file_url
+        }, {"id": f"eq.{case_id}"})
+
+        return {
+            "success": True, 
+            "confidence_score": res_data.get("confidence_score"),
+            "ai_reasoning": res_data.get("reasoning"),
+            "generated_doc_url": file_url
+        }
+
+    except Exception as e:
+        print(f"[ORCHESTRATE ERROR] {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/cases/{case_id}/initiate")
+async def initiate_gl_request(case_id: str, body: dict):
+    """
+    1. Construct a professional email for the insurance company.
+    2. Simulate sending the email with the generated PDF.
+    3. Update workflow_status to 'GL Requested' or 'Claim Submitted'.
+    """
+    try:
+        claim_type = body.get("type", "GL")
+        print(f"[INITIATE] Starting initiation for case {case_id} (Type: {claim_type})")
+
+        # 1. Fetch data
+        case_res = await supabase_rest.query_table("medical_cases", {"select": "*, patients(*)", "id": f"eq.{case_id}"})
+        if not case_res:
+            raise HTTPException(status_code=404, detail="Case not found")
+        case_data = case_res[0]
+        patient_data = case_data.get("patients", {})
+        doc_url = case_data.get("generated_doc_url")
+
+        if not doc_url:
+            raise HTTPException(status_code=400, detail="No generated document found. Please run orchestration first.")
+
+        # 2. Professional Email Construction
+        insurance_email = "leiwingteng@gmail.com"
+        subject = f"REQUEST FOR GUARANTEE LETTER - {patient_data.get('full_name')} [{case_id}]"
+        if claim_type == "Claim":
+            subject = f"INSURANCE CLAIM SUBMISSION - {patient_data.get('full_name')} [{case_id}]"
+
+        email_body = f"""
+        Dear Insurance Department,
+
+        We are submitting a formal {claim_type} request for the following patient:
+        
+        Patient Name: {patient_data.get('full_name')}
+        Policy Number: {patient_data.get('policy_url', 'On File')}
+        Case Reference: {case_id}
+        
+        Attached you will find the generated documentation including the Hospital Admission Form and Clinical Referral Letter.
+        
+        Please review and issue the Guarantee Letter at your earliest convenience.
+        
+        Regards,
+        CareFlow Admin Team
+        """
+        
+        # 3. Real Email Sending logic
+        sender_email = os.getenv("EMAIL_USER")
+        sender_password = os.getenv("EMAIL_PASSWORD")
+
+        if sender_email and sender_password:
+            try:
+                # Create message
+                msg = MIMEMultipart()
+                msg['From'] = sender_email
+                msg['To'] = insurance_email
+                msg['Subject'] = subject
+                msg.attach(MIMEText(email_body, 'plain'))
+
+                # Download PDF to attach
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(doc_url)
+                    if resp.status_code == 200:
+                        part = MIMEApplication(resp.content, Name=f"{claim_type}_Request_{case_id}.pdf")
+                        part['Content-Disposition'] = f'attachment; filename="{claim_type}_Request_{case_id}.pdf"'
+                        msg.attach(part)
+
+                # Send
+                with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+                    server.login(sender_email, sender_password)
+                    server.send_message(msg)
+                print(f"[INITIATE] Real email sent to {insurance_email}")
+            except Exception as mail_err:
+                print(f"[INITIATE MAIL ERROR] {mail_err}")
+                # We don't raise here so the DB still updates, but we log it
+        else:
+            print(f"--- SIMULATED EMAIL SENT (Missing Credentials) ---")
+            print(f"To: {insurance_email}")
+            print(f"Subject: {subject}")
+            print(f"Attachment: {doc_url}")
+            print("--------------------------------------------------")
+
+        # 4. Update Workflow Status
+        new_status = "GL Requested" if claim_type == "GL" else "Claim Submitted"
+        await supabase_rest.update_table("medical_cases", {"workflow_status": new_status}, {"id": f"eq.{case_id}"})
+
+        return {"success": True, "status": new_status, "recipient": insurance_email}
+
+    except Exception as e:
+        print(f"[INITIATE ERROR] {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

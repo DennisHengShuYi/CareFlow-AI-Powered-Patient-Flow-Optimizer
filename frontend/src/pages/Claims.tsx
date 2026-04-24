@@ -1,31 +1,337 @@
 import { useLocation } from 'react-router-dom';
 import LayoutSidebar from '../components/LayoutSidebar';
-import { FileUp, FileText, BriefcaseMedical, ReceiptText, Bot, CheckCircle2, Circle, Lock, Plus, Pencil } from 'lucide-react';
-import { useState } from 'react';
+import {
+  FileUp, FileText, BriefcaseMedical, ReceiptText, Bot,
+  CheckCircle2, Circle, Lock, Plus, ExternalLink,
+  UploadCloud, X, Loader2, Pencil, ShieldCheck
+} from 'lucide-react';
+import { useState, useRef } from 'react';
+
+const API = 'http://127.0.0.1:8002';
+
+interface SupportingDoc {
+  id: number;
+  label: string;
+  filename: string;
+  url: string;
+}
 
 export default function Claims() {
   const location = useLocation();
-  const { 
-    patientName = 'Unknown Patient', 
-    diagnosis = 'Medical_Diagnosis.pdf', 
-    insurers = ['Patient_Policy.pdf'], 
-    billUrl, 
-    billPrice 
+  const {
+    patientName = 'Unknown Patient',
+    patientId,
+    caseId,
+    diagnosis = 'Pending Diagnosis',
+    insurers = [],
+    policyUrl: initialPolicyUrl,
+    billUrl: initialBillUrl,
+    billPrice,
+    diagnosisPdfUrl: initialDiagnosisPdfUrl,
+    confidenceScore: initialConfidenceScore = 0,
+    aiReasoning: initialAiReasoning = null,
+    generatedDocUrl: initialGeneratedDocUrl = null,
+    claimType: initialClaimType = 'GL',
+    workflowStatus: initialWorkflowStatus = null,
   } = location.state || {};
 
-  const [documents, setDocuments] = useState([
-    { id: 1, name: diagnosis.endsWith('.pdf') ? diagnosis : 'Medical_Diagnosis.pdf', content: diagnosis, type: 'diagnosis', icon: <FileText color="var(--secondary)" size={20} /> },
-    { id: 2, name: 'Patient_Policy.pdf', content: insurers.join(', '), type: 'policy', icon: <BriefcaseMedical color="var(--secondary)" size={20} /> },
-    { id: 3, name: 'Medical_Bill.pdf', content: billUrl ? `RM ${billPrice}` : 'Awaiting Integration', type: 'bill', url: billUrl, icon: <ReceiptText color={billUrl ? "var(--secondary)" : "var(--text-muted)"} size={20} /> }
-  ]);
+  // ── Document state ──────────────────────────────────────────
+  const [policyUrl, setPolicyUrl] = useState<string | undefined>(initialPolicyUrl);
+  const [billUrl, setBillUrl]     = useState<string | undefined>(initialBillUrl);
+  const [diagnosisPdfUrl, setDiagnosisPdfUrl] = useState<string | undefined>(initialDiagnosisPdfUrl);
+  const [diagnosisText, setDiagnosisText]     = useState<string>(diagnosis);
+  const [confidenceScore, setConfidenceScore] = useState<number>(initialConfidenceScore);
+  const [aiReasoning, setAiReasoning]         = useState<string | null>(initialAiReasoning);
+  const [generatedDocUrl, setGeneratedDocUrl] = useState<string | null>(initialGeneratedDocUrl);
+  const [workflowStatus, setWorkflowStatus]   = useState<string | null>(initialWorkflowStatus);
+  const [supportingDocs, setSupportingDocs]   = useState<SupportingDoc[]>([]);
 
+  // ── Modal state ─────────────────────────────────────────────
+  const [modal, setModal] = useState<'policy' | 'bill' | 'support' | 'diagnosis' | null>(null);
+  const [uploading, setUploading]     = useState(false);
+  const [orchestrating, setOrchestrating] = useState(false);
+  const [submitting, setSubmitting]       = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  // Policy replace
+  const [policyFile, setPolicyFile] = useState<File | null>(null);
+
+  // Bill replace
+  const [billFile, setBillFile]     = useState<File | null>(null);
+  const [billAmount, setBillAmount] = useState(billPrice ? String(billPrice) : '');
+
+  // Supporting doc
+  const [docLabel, setDocLabel]   = useState('');
+  const [docFile, setDocFile]     = useState<File | null>(null);
+
+  const policyInputRef  = useRef<HTMLInputElement>(null);
+  const billInputRef    = useRef<HTMLInputElement>(null);
+  const supportInputRef = useRef<HTMLInputElement>(null);
+
+  function closeModal() {
+    setModal(null);
+    setPolicyFile(null);
+    setBillFile(null);
+    setDocLabel('');
+    setDocFile(null);
+    setUploadError(null);
+  }
+
+  // ── Upload handlers ─────────────────────────────────────────
+
+  async function handleReplacePolicy(e: React.FormEvent) {
+    e.preventDefault();
+    if (!policyFile || !patientId) return;
+    setUploading(true); setUploadError(null);
+    try {
+      const token = localStorage.getItem('token');
+      const fd = new FormData();
+      fd.append('file', policyFile);
+      const res = await fetch(`${API}/api/patients/${patientId}/policy`, {
+        method: 'POST',
+        headers: { Authorization: token ? `Bearer ${token}` : '' },
+        body: fd,
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Upload failed');
+      const data = await res.json();
+      setPolicyUrl(data.policy_url);
+      closeModal();
+    } catch (err: any) {
+      setUploadError(err.message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleReplaceBill(e: React.FormEvent) {
+    e.preventDefault();
+    if (!billFile || !caseId || !billAmount) return;
+    setUploading(true); setUploadError(null);
+    try {
+      const token = localStorage.getItem('token');
+      const fd = new FormData();
+      fd.append('file', billFile);
+      fd.append('total_bill', billAmount);
+      const res = await fetch(`${API}/api/cases/${caseId}/bill`, {
+        method: 'POST',
+        headers: { Authorization: token ? `Bearer ${token}` : '' },
+        body: fd,
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Upload failed');
+      const data = await res.json();
+      setBillUrl(data.file_url);
+      closeModal();
+    } catch (err: any) {
+      setUploadError(err.message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleAddSupportingDoc(e: React.FormEvent) {
+    e.preventDefault();
+    if (!docFile || !caseId) return;
+    setUploading(true); setUploadError(null);
+    try {
+      const token = localStorage.getItem('token');
+      const fd = new FormData();
+      fd.append('file', docFile);
+      fd.append('label', docLabel || docFile.name);
+      const res = await fetch(`${API}/api/cases/${caseId}/supporting-doc`, {
+        method: 'POST',
+        headers: { Authorization: token ? `Bearer ${token}` : '' },
+        body: fd,
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Upload failed');
+      const data = await res.json();
+      setSupportingDocs(prev => [...prev, {
+        id: Date.now(),
+        label: data.label,
+        filename: data.filename,
+        url: data.url,
+      }]);
+      closeModal();
+    } catch (err: any) {
+      setUploadError(err.message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleGenerateSoap(e: React.FormEvent) {
+    e.preventDefault();
+    if (!caseId || !diagnosisText) return;
+    setUploading(true); setUploadError(null);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${API}/api/cases/${caseId}/soap-diagnosis`, {
+        method: 'POST',
+        headers: { 
+          'Authorization': token ? `Bearer ${token}` : '',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ diagnosis_text: diagnosisText }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || 'SOAP Generation failed');
+      const data = await res.json();
+      setDiagnosisPdfUrl(data.pdf_url);
+      closeModal();
+    } catch (err: any) {
+      setUploadError(err.message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleOrchestrate() {
+    if (!caseId) return;
+    setOrchestrating(true);
+    setUploadError(null);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${API}/api/cases/${caseId}/orchestrate`, {
+        method: 'POST',
+        headers: { 
+          'Authorization': token ? `Bearer ${token}` : '',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ type: initialClaimType }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Orchestration failed');
+      const data = await res.json();
+      setConfidenceScore(data.confidence_score);
+      setAiReasoning(data.ai_reasoning);
+      setGeneratedDocUrl(data.generated_doc_url);
+    } catch (err: any) {
+      setUploadError(err.message);
+    } finally {
+      setOrchestrating(false);
+    }
+  }
+
+  async function handleInitiate() {
+    if (!caseId || !generatedDocUrl) return;
+    setSubmitting(true);
+    setUploadError(null);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${API}/api/cases/${caseId}/initiate`, {
+        method: 'POST',
+        headers: { 
+          'Authorization': token ? `Bearer ${token}` : '',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ type: initialClaimType }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Initiation failed');
+      const data = await res.json();
+      setWorkflowStatus(data.status);
+      alert('Request Sent! The documents have been submitted to the insurance company.');
+    } catch (err: any) {
+      setUploadError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // ── Shared file drop zone ────────────────────────────────────
+  const FileZone = ({
+    file, onFile, inputRef, accept = '*/*'
+  }: {
+    file: File | null;
+    onFile: (f: File) => void;
+    inputRef: React.RefObject<HTMLInputElement>;
+    accept?: string;
+  }) => (
+    <div
+      onClick={() => inputRef.current?.click()}
+      style={{
+        border: `2px dashed ${file ? 'var(--primary)' : 'var(--neutral-400)'}`,
+        borderRadius: '12px', padding: '1.5rem', textAlign: 'center',
+        cursor: 'pointer', backgroundColor: file ? 'var(--primary-fixed)' : 'var(--neutral-100)',
+        transition: 'all 0.2s',
+      }}
+    >
+      <UploadCloud size={26} color={file ? 'var(--primary)' : 'var(--text-muted)'} style={{ marginBottom: '6px' }} />
+      <div style={{ fontSize: '0.85rem', fontWeight: 600, color: file ? 'var(--primary)' : 'var(--text-main)' }}>
+        {file ? file.name : 'Click to select file'}
+      </div>
+      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>PDF · max 10 MB</div>
+      <input
+        ref={inputRef} type="file" accept={accept}
+        style={{ display: 'none' }}
+        onChange={e => { if (e.target.files?.[0]) onFile(e.target.files[0]); }}
+      />
+    </div>
+  );
+
+  // ── Document row ─────────────────────────────────────────────
+  const DocRow = ({
+    icon, title, subtitle, url, onEdit, status
+  }: {
+    icon: React.ReactNode;
+    title: string;
+    subtitle?: string;
+    url?: string;
+    onEdit?: () => void;
+    status?: 'ok' | 'missing';
+  }) => (
+    <div style={{
+      background: 'var(--neutral-300)', padding: '1rem 1.25rem', borderRadius: '14px',
+      display: 'flex', alignItems: 'center', gap: '1rem',
+      border: `1px solid ${status === 'ok' ? 'rgba(46,125,50,0.2)' : 'var(--neutral-400)'}`,
+    }}>
+      <div style={{
+        width: 40, height: 40, borderRadius: 10, background: 'white',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+      }}>
+        {icon}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: '0.875rem' }}>{title}</div>
+        {subtitle && (
+          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {subtitle}
+          </div>
+        )}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', alignItems: 'stretch', flexShrink: 0 }}>
+        {url && (
+          <button
+            onClick={() => window.open(url, '_blank')}
+            title="View"
+            style={{ background: 'var(--primary-fixed)', border: 'none', padding: '5px 10px', borderRadius: 8, cursor: 'pointer', color: 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, fontSize: '0.72rem', fontWeight: 700 }}
+          >
+            <ExternalLink size={12} /> View
+          </button>
+        )}
+        {onEdit && (
+          <button
+            onClick={onEdit}
+            title="Replace"
+            style={{ background: 'white', border: '1px solid var(--neutral-400)', padding: '5px 10px', borderRadius: 8, cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, fontSize: '0.72rem', fontWeight: 600 }}
+          >
+            <Pencil size={12} /> {url ? 'Replace' : 'Upload'}
+          </button>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 2 }}>
+          {status === 'ok'
+            ? <CheckCircle2 size={16} color="#2e7d32" />
+            : <Circle size={16} color="var(--neutral-500)" />
+          }
+        </div>
+      </div>
+    </div>
+  );
+
+  // ── Render ───────────────────────────────────────────────────
   return (
     <LayoutSidebar>
       <div className="responsive-padding responsive-grid" style={{ height: '100%', overflowY: 'auto' }}>
-        
-        {/* Left Column - Document Inputs */}
+
+        {/* ── Left: Document Inputs ─────────────────────────── */}
         <div className="card" style={{ display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.75rem' }}>
             <div>
               <h2 style={{ fontSize: 'var(--font-h2)' }}>Document Inputs</h2>
               <div style={{ fontSize: '0.875rem', color: 'var(--primary)', fontWeight: 600 }}>{patientName}</div>
@@ -33,112 +339,296 @@ export default function Claims() {
             <FileUp size={20} color="var(--primary)" />
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', flex: 1 }}>
-            {documents.map((doc) => (
-              <div key={doc.id} style={{ background: 'var(--neutral-300)', padding: '1.25rem', borderRadius: '16px', display: 'flex', alignItems: 'center', gap: '1rem', border: '1px solid var(--neutral-400)' }}>
-                <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  {doc.icon}
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>{doc.name}</div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px' }}>
-                    {doc.content}
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }} title="Edit">
-                    <Pencil size={16} color="var(--text-muted)" />
-                  </button>
-                  {doc.type === 'bill' && doc.url ? (
-                    <CheckCircle2 color="#2e7d32" size={20} onClick={() => window.open(doc.url, '_blank')} style={{ cursor: 'pointer' }} />
-                  ) : (
-                    <CheckCircle2 color="#2e7d32" size={20} />
-                  )}
-                </div>
-              </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem', flex: 1 }}>
+
+            {/* Diagnosis */}
+            <DocRow
+              icon={<FileText color="var(--secondary)" size={20} />}
+              title="Medical Diagnosis"
+              subtitle={diagnosisText}
+              url={diagnosisPdfUrl}
+              onEdit={caseId ? () => { setModal('diagnosis'); } : undefined}
+              status={diagnosisPdfUrl ? 'ok' : 'missing'}
+            />
+
+            {/* Insurance Policy */}
+            <DocRow
+              icon={<BriefcaseMedical color="var(--secondary)" size={20} />}
+              title="Insurance Policy"
+              subtitle={
+                insurers.length > 0 ? insurers.join(', ') :
+                policyUrl ? 'Policy document on file' : 'No policy uploaded'
+              }
+              url={policyUrl}
+              onEdit={patientId ? () => { setPolicyFile(null); setModal('policy'); } : undefined}
+              status={policyUrl ? 'ok' : 'missing'}
+            />
+
+            {/* Medical Bill */}
+            <DocRow
+              icon={<ReceiptText color={billUrl ? 'var(--secondary)' : 'var(--text-muted)'} size={20} />}
+              title="Medical Bill"
+              subtitle={billUrl ? `RM ${Number(billPrice || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}` : 'No bill uploaded'}
+              url={billUrl}
+              onEdit={caseId ? () => { setBillFile(null); setModal('bill'); } : undefined}
+              status={billUrl ? 'ok' : 'missing'}
+            />
+
+            {/* Supporting docs */}
+            {supportingDocs.map(doc => (
+              <DocRow
+                key={doc.id}
+                icon={<ShieldCheck color="var(--secondary)" size={20} />}
+                title={doc.label}
+                subtitle={doc.filename}
+                url={doc.url}
+                status="ok"
+              />
             ))}
 
-            <button style={{ background: 'white', border: '1px solid var(--neutral-400)', padding: '1.25rem', borderRadius: '9999px', color: 'var(--secondary)', fontWeight: 600, marginTop: 'auto', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem' }}>
-              <Plus size={20} /> Add Document
+            {/* Add document */}
+            <button
+              onClick={() => { setDocLabel(''); setDocFile(null); setModal('support'); }}
+              style={{
+                background: 'white', border: '1px dashed var(--neutral-400)',
+                padding: '1rem', borderRadius: '14px', color: 'var(--secondary)',
+                fontWeight: 600, marginTop: 'auto', display: 'flex',
+                justifyContent: 'center', alignItems: 'center', gap: '0.5rem',
+                cursor: 'pointer', fontSize: '0.875rem',
+              }}
+            >
+              <Plus size={18} /> Add Supporting Document
             </button>
           </div>
         </div>
 
-        {/* Middle Column - AI Orchestrator */}
+        {/* ── Middle: AI Orchestrator ───────────────────────── */}
         <div style={{ background: 'var(--bg-gradient)', borderRadius: '1rem', padding: 'var(--container-gap)', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          <div style={{ width: '60px', height: '60px', borderRadius: '50%', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem', boxShadow: '0 10px 30px rgba(0,0,0,0.05)' }}>
+          <div style={{ width: 60, height: 60, borderRadius: '50%', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem', boxShadow: '0 10px 30px rgba(0,0,0,0.05)' }}>
             <Bot size={32} color="var(--secondary)" />
           </div>
           <h2 style={{ fontSize: 'var(--font-h2)', fontWeight: 800, marginBottom: '0.5rem' }}>AI Orchestrator</h2>
           <p style={{ color: 'var(--text-muted)', marginBottom: '2rem', fontSize: '0.875rem' }}>Analyzing claim variables</p>
 
-          <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '1.5rem', position: 'relative' }}>
-            <div style={{ position: 'absolute', left: '11px', top: '24px', bottom: '24px', width: '2px', background: 'var(--neutral-400)', zIndex: 0 }}></div>
-            
-            <div style={{ display: 'flex', gap: '1rem', position: 'relative', zIndex: 1 }}>
-              <div style={{ width: '24px', height: '24px', minWidth: '24px', borderRadius: '50%', background: 'var(--secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <CheckCircle2 color="white" size={14} />
+          <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '1.5rem', flex: 1, justifyContent: 'center' }}>
+            {orchestrating ? (
+              <div style={{ textAlign: 'center', padding: '2rem' }}>
+                <Loader2 size={48} className="animate-spin" color="var(--secondary)" style={{ margin: '0 auto 1.5rem' }} />
+                <div style={{ fontWeight: 700, marginBottom: '0.5rem' }}>AI is analyzing documents...</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Extracting clinical data and checking policy compliance.</div>
               </div>
-              <div>
-                <h4 style={{ fontWeight: 700, fontSize: '0.9rem' }}>Auto Claim Generation</h4>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>ICD-10 codes mapped</div>
+            ) : generatedDocUrl ? (
+              <div style={{ textAlign: 'center', padding: '2rem' }}>
+                <CheckCircle2 size={48} color="var(--secondary)" style={{ margin: '0 auto 1.5rem' }} />
+                <div style={{ fontWeight: 700, marginBottom: '0.5rem' }}>Orchestration Complete</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '1.5rem' }}>All clinical variables mapped to {initialClaimType} forms.</div>
+                <button 
+                  onClick={handleOrchestrate}
+                  style={{ background: 'white', border: '1px solid var(--neutral-400)', padding: '8px 16px', borderRadius: 10, fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  Run Again
+                </button>
               </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: '1rem', position: 'relative', zIndex: 1 }}>
-              <div style={{ width: '24px', height: '24px', minWidth: '24px', borderRadius: '50%', background: 'white', border: '3px solid var(--secondary)' }}></div>
-              <div style={{ flex: 1 }}>
-                <h4 style={{ fontWeight: 700, color: 'var(--secondary)', fontSize: '0.9rem' }}>Validation Engine</h4>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>Querying insurer database</div>
-                
-                <div style={{ background: 'white', borderRadius: '12px', padding: '0.75rem', fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                  {'> Checking coverage limits...'}<br/>
-                  {'> Matching Diagnosis to Policy...'}
+            ) : (
+              <div style={{ textAlign: 'center', padding: '2rem' }}>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '2rem' }}>
+                  Ready to process diagnosis, medical bill, and insurance policy for <b>{initialClaimType}</b> generation.
                 </div>
+                <button 
+                  onClick={handleOrchestrate}
+                  className="btn-primary"
+                  style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+                >
+                  <Bot size={18} /> Start AI Orchestration
+                </button>
               </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: '1rem', position: 'relative', zIndex: 1 }}>
-              <div style={{ width: '24px', height: '24px', minWidth: '24px', borderRadius: '50%', background: 'var(--neutral-400)' }}></div>
-              <div style={{ opacity: 0.5 }}>
-                <h4 style={{ fontWeight: 700, fontSize: '0.9rem' }}>GL Pre-auth</h4>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Awaiting policy clearance</div>
-              </div>
-            </div>
+            )}
           </div>
         </div>
 
-        {/* Right Column - Claim Output */}
+        {/* ── Right: Claim Output ───────────────────────────── */}
         <div className="card" style={{ display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
             <h2 style={{ fontSize: 'var(--font-h2)' }}>Claim Output</h2>
-            <span style={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '1px', background: '#e0f2f1', color: '#00695c', padding: '0.25rem 0.5rem', borderRadius: '9999px', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+            <span style={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: 1, background: '#e0f2f1', color: '#00695c', padding: '0.25rem 0.5rem', borderRadius: '9999px', display: 'flex', alignItems: 'center', gap: 4 }}>
               <Circle fill="currentColor" size={8} /> PROCESSING
             </span>
           </div>
 
-          <div style={{ background: 'var(--neutral-300)', borderRadius: '16px', padding: '1.25rem', marginBottom: '1.5rem' }}>
+          <div style={{ background: 'var(--neutral-300)', borderRadius: 16, padding: '1.25rem', marginBottom: '1.5rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1rem' }}>
-              <div style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '1px', color: 'var(--text-muted)' }}>CONFIDENCE SCORE</div>
-              <div style={{ fontSize: '2rem', fontWeight: 800, lineHeight: 1 }}>94%</div>
+              <div style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: 1, color: 'var(--text-muted)' }}>CONFIDENCE SCORE</div>
+              <div style={{ fontSize: '2rem', fontWeight: 800, lineHeight: 1 }}>{confidenceScore}%</div>
             </div>
-            <div style={{ height: '4px', background: 'rgba(0,0,0,0.05)', borderRadius: '2px', marginBottom: '0.75rem' }}>
-              <div style={{ height: '100%', width: '94%', background: 'var(--secondary)', borderRadius: '2px' }}></div>
+            <div style={{ height: 4, background: 'rgba(0,0,0,0.05)', borderRadius: 2, marginBottom: '0.75rem' }}>
+              <div style={{ height: '100%', width: `${confidenceScore}%`, background: 'var(--secondary)', borderRadius: 2, transition: 'width 1s ease-in-out' }} />
             </div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>High probability of automatic approval.</div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-main)', fontWeight: 500, marginTop: '0.75rem' }}>
+              {aiReasoning || 'Start orchestration to see AI analysis.'}
+            </div>
           </div>
 
-          <h3 style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: '0.75rem' }}>GL Preview</h3>
-          <div style={{ flex: 1, minHeight: '120px', background: 'var(--neutral-300)', borderRadius: '16px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
-            <Lock size={24} style={{ marginBottom: '0.75rem', opacity: 0.5 }} />
-            <div style={{ fontSize: '0.75rem', textAlign: 'center', padding: '0 1rem' }}>Preview will unlock after validation.</div>
+          <h3 style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: '0.75rem' }}>{initialClaimType} Preview</h3>
+          <div style={{ flex: 1, minHeight: 120, background: 'var(--neutral-300)', borderRadius: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', marginBottom: '1.5rem', border: generatedDocUrl ? '2px solid var(--secondary)' : 'none' }}>
+            {generatedDocUrl ? (
+              <div style={{ textAlign: 'center', padding: '1rem' }}>
+                <ShieldCheck size={32} color="var(--secondary)" style={{ marginBottom: '0.5rem' }} />
+                <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '0.5rem' }}>Document Generated</div>
+                <button 
+                  onClick={() => window.open(generatedDocUrl, '_blank')}
+                  style={{ background: 'var(--secondary)', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 8, fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  View PDF Form
+                </button>
+              </div>
+            ) : (
+              <>
+                <Lock size={24} style={{ marginBottom: '0.75rem', opacity: 0.5 }} />
+                <div style={{ fontSize: '0.75rem', textAlign: 'center', padding: '0 1rem' }}>Preview will unlock after orchestration.</div>
+              </>
+            )}
           </div>
 
-          <button className="btn-primary" style={{ width: '100%', opacity: 0.5, cursor: 'not-allowed', marginBottom: '0.75rem', fontSize: '0.875rem' }}>Approve & Initiate GL</button>
-          <button className="btn-secondary" style={{ width: '100%', background: 'var(--neutral-200)', fontSize: '0.875rem' }}>Draft Referral Letter</button>
+          <button 
+            className="btn-primary" 
+            onClick={handleInitiate}
+            disabled={!generatedDocUrl || submitting || (workflowStatus === 'GL Requested' || workflowStatus === 'Claim Submitted')}
+            style={{ 
+              width: '100%', 
+              opacity: (!generatedDocUrl || submitting || (workflowStatus === 'GL Requested' || workflowStatus === 'Claim Submitted')) ? 0.5 : 1, 
+              cursor: (!generatedDocUrl || submitting || (workflowStatus === 'GL Requested' || workflowStatus === 'Claim Submitted')) ? 'not-allowed' : 'pointer', 
+              marginBottom: '0.75rem', 
+              fontSize: '0.875rem',
+              background: (workflowStatus === 'GL Requested' || workflowStatus === 'Claim Submitted') ? '#2e7d32' : undefined,
+              color: (workflowStatus === 'GL Requested' || workflowStatus === 'Claim Submitted') ? 'white' : undefined,
+            }}
+          >
+            {submitting ? (
+              <><Loader2 size={16} className="animate-spin" /> Sending...</>
+            ) : (workflowStatus === 'GL Requested' || workflowStatus === 'Claim Submitted') ? (
+              <><CheckCircle2 size={16} /> {workflowStatus}</>
+            ) : (
+              `Approve & Initiate ${initialClaimType}`
+            )}
+          </button>
+          <button className="btn-secondary" style={{ width: '100%', background: 'var(--neutral-200)', fontSize: '0.875rem' }}>
+            Draft Referral Letter
+          </button>
         </div>
-
       </div>
+
+      {/* ── Modal: Replace Policy ─────────────────────────────── */}
+      {modal === 'policy' && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, backdropFilter: 'blur(4px)' }}>
+          <div className="card" style={{ width: '100%', maxWidth: 480, padding: '2rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h3 style={{ fontWeight: 800, fontSize: '1.25rem' }}>{policyUrl ? 'Replace' : 'Upload'} Insurance Policy</h3>
+              <button onClick={closeModal} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={22} /></button>
+            </div>
+            <form onSubmit={handleReplacePolicy}>
+              <div style={{ marginBottom: '1.5rem' }}>
+                <FileZone file={policyFile} onFile={setPolicyFile} inputRef={policyInputRef} accept="application/pdf" />
+              </div>
+              {uploadError && <div style={{ color: '#ef5350', fontSize: '0.85rem', marginBottom: '1rem', fontWeight: 600 }}>{uploadError}</div>}
+              <div style={{ display: 'flex', gap: '0.75rem' }}>
+                <button type="button" onClick={closeModal} style={{ flex: 1, padding: '0.75rem', borderRadius: 10, border: '1px solid var(--neutral-400)', background: 'white', fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
+                <button type="submit" disabled={!policyFile || uploading} style={{ flex: 1, padding: '0.75rem', borderRadius: 10, border: 'none', background: 'var(--primary)', color: 'white', fontWeight: 700, cursor: !policyFile || uploading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                  {uploading ? <><Loader2 size={16} className="animate-spin" /> Uploading...</> : 'Save Policy'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal: Replace Bill ───────────────────────────────── */}
+      {modal === 'bill' && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, backdropFilter: 'blur(4px)' }}>
+          <div className="card" style={{ width: '100%', maxWidth: 480, padding: '2rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h3 style={{ fontWeight: 800, fontSize: '1.25rem' }}>{billUrl ? 'Replace' : 'Upload'} Medical Bill</h3>
+              <button onClick={closeModal} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={22} /></button>
+            </div>
+            <form onSubmit={handleReplaceBill}>
+              <div style={{ marginBottom: '1.25rem' }}>
+                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem', color: 'var(--text-muted)' }}>BILL AMOUNT (RM)</label>
+                <input type="number" step="0.01" required value={billAmount} onChange={e => setBillAmount(e.target.value)} placeholder="0.00"
+                  style={{ width: '100%', padding: '0.75rem', borderRadius: 10, border: '1px solid var(--neutral-400)', fontSize: '0.9rem' }} />
+              </div>
+              <div style={{ marginBottom: '1.5rem' }}>
+                <FileZone file={billFile} onFile={setBillFile} inputRef={billInputRef} accept="application/pdf,image/*" />
+              </div>
+              {uploadError && <div style={{ color: '#ef5350', fontSize: '0.85rem', marginBottom: '1rem', fontWeight: 600 }}>{uploadError}</div>}
+              <div style={{ display: 'flex', gap: '0.75rem' }}>
+                <button type="button" onClick={closeModal} style={{ flex: 1, padding: '0.75rem', borderRadius: 10, border: '1px solid var(--neutral-400)', background: 'white', fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
+                <button type="submit" disabled={!billFile || !billAmount || uploading} style={{ flex: 1, padding: '0.75rem', borderRadius: 10, border: 'none', background: 'var(--primary)', color: 'white', fontWeight: 700, cursor: !billFile || uploading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                  {uploading ? <><Loader2 size={16} className="animate-spin" /> Uploading...</> : 'Save Bill'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal: Add Supporting Doc ─────────────────────────── */}
+      {modal === 'support' && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, backdropFilter: 'blur(4px)' }}>
+          <div className="card" style={{ width: '100%', maxWidth: 480, padding: '2rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h3 style={{ fontWeight: 800, fontSize: '1.25rem' }}>Add Supporting Document</h3>
+              <button onClick={closeModal} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={22} /></button>
+            </div>
+            <form onSubmit={handleAddSupportingDoc}>
+              <div style={{ marginBottom: '1.25rem' }}>
+                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem', color: 'var(--text-muted)' }}>DOCUMENT LABEL</label>
+                <input type="text" value={docLabel} onChange={e => setDocLabel(e.target.value)} placeholder="e.g. Referral Letter, Discharge Summary"
+                  style={{ width: '100%', padding: '0.75rem', borderRadius: 10, border: '1px solid var(--neutral-400)', fontSize: '0.9rem' }} />
+              </div>
+              <div style={{ marginBottom: '1.5rem' }}>
+                <FileZone file={docFile} onFile={setDocFile} inputRef={supportInputRef} accept="application/pdf,image/*" />
+              </div>
+              {uploadError && <div style={{ color: '#ef5350', fontSize: '0.85rem', marginBottom: '1rem', fontWeight: 600 }}>{uploadError}</div>}
+              <div style={{ display: 'flex', gap: '0.75rem' }}>
+                <button type="button" onClick={closeModal} style={{ flex: 1, padding: '0.75rem', borderRadius: 10, border: '1px solid var(--neutral-400)', background: 'white', fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
+                <button type="submit" disabled={!docFile || uploading} style={{ flex: 1, padding: '0.75rem', borderRadius: 10, border: 'none', background: 'var(--primary)', color: 'white', fontWeight: 700, cursor: !docFile || uploading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                  {uploading ? <><Loader2 size={16} className="animate-spin" /> Uploading...</> : 'Add Document'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* ── Modal: Edit Diagnosis & SOAP ──────────────────────── */}
+      {modal === 'diagnosis' && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, backdropFilter: 'blur(4px)' }}>
+          <div className="card" style={{ width: '100%', maxWidth: 520, padding: '2rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h3 style={{ fontWeight: 800, fontSize: '1.25rem' }}>Edit Diagnosis & Generate SOAP</h3>
+              <button onClick={closeModal} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={22} /></button>
+            </div>
+            <form onSubmit={handleGenerateSoap}>
+              <div style={{ marginBottom: '1.5rem' }}>
+                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem', color: 'var(--text-muted)' }}>DIAGNOSIS NOTE</label>
+                <textarea 
+                  required 
+                  value={diagnosisText} 
+                  onChange={e => setDiagnosisText(e.target.value)} 
+                  rows={6}
+                  style={{ width: '100%', padding: '0.75rem', borderRadius: 10, border: '1px solid var(--neutral-400)', fontSize: '0.9rem', resize: 'vertical' }} 
+                  placeholder="Enter medical diagnosis or clinical notes..."
+                />
+              </div>
+              {uploadError && <div style={{ color: '#ef5350', fontSize: '0.85rem', marginBottom: '1rem', fontWeight: 600 }}>{uploadError}</div>}
+              <div style={{ display: 'flex', gap: '0.75rem' }}>
+                <button type="button" onClick={closeModal} style={{ flex: 1, padding: '0.75rem', borderRadius: 10, border: '1px solid var(--neutral-400)', background: 'white', fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
+                <button type="submit" disabled={uploading || !diagnosisText} style={{ flex: 1, padding: '0.75rem', borderRadius: 10, border: 'none', background: 'var(--primary)', color: 'white', fontWeight: 700, cursor: uploading || !diagnosisText ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                  {uploading ? <><Loader2 size={16} className="animate-spin" /> Processing AI SOAP...</> : 'Generate SOAP PDF'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </LayoutSidebar>
   );
 }

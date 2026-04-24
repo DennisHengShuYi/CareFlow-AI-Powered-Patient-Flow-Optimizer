@@ -127,4 +127,21 @@ class UpstashRedis:
         return current <= settings.RATE_LIMIT_MAX
 
 
+    # ------------------------------------------------------------------
+    # Generic JSON helpers
+    # ------------------------------------------------------------------
+    async def set_json(self, key: str, data: dict, ex: int = 86400) -> None:
+        """Store JSON string with TTL (default 24h)."""
+        if not self._enabled:
+            return
+        await self._cmd("SET", key, json.dumps(data), "EX", ex)
+
+    async def get_json(self, key: str) -> Optional[dict]:
+        """Fetch and parse JSON from Redis."""
+        if not self._enabled:
+            return None
+        result = await self._cmd("GET", key)
+        return json.loads(result) if result else None
+
+
 redis_client = UpstashRedis()
