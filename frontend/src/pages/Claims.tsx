@@ -1,7 +1,24 @@
+import { useLocation } from 'react-router-dom';
 import LayoutSidebar from '../components/LayoutSidebar';
-import { FileUp, FileText, BriefcaseMedical, ReceiptText, Bot, CheckCircle2, Circle, Lock } from 'lucide-react';
+import { FileUp, FileText, BriefcaseMedical, ReceiptText, Bot, CheckCircle2, Circle, Lock, Plus, Pencil } from 'lucide-react';
+import { useState } from 'react';
 
 export default function Claims() {
+  const location = useLocation();
+  const { 
+    patientName = 'Unknown Patient', 
+    diagnosis = 'Medical_Diagnosis.pdf', 
+    insurers = ['Patient_Policy.pdf'], 
+    billUrl, 
+    billPrice 
+  } = location.state || {};
+
+  const [documents, setDocuments] = useState([
+    { id: 1, name: diagnosis.endsWith('.pdf') ? diagnosis : 'Medical_Diagnosis.pdf', content: diagnosis, type: 'diagnosis', icon: <FileText color="var(--secondary)" size={20} /> },
+    { id: 2, name: 'Patient_Policy.pdf', content: insurers.join(', '), type: 'policy', icon: <BriefcaseMedical color="var(--secondary)" size={20} /> },
+    { id: 3, name: 'Medical_Bill.pdf', content: billUrl ? `RM ${billPrice}` : 'Awaiting Integration', type: 'bill', url: billUrl, icon: <ReceiptText color={billUrl ? "var(--secondary)" : "var(--text-muted)"} size={20} /> }
+  ]);
+
   return (
     <LayoutSidebar>
       <div className="responsive-padding responsive-grid" style={{ height: '100%', overflowY: 'auto' }}>
@@ -9,46 +26,40 @@ export default function Claims() {
         {/* Left Column - Document Inputs */}
         <div className="card" style={{ display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-            <h2 style={{ fontSize: 'var(--font-h2)' }}>Document Inputs</h2>
+            <div>
+              <h2 style={{ fontSize: 'var(--font-h2)' }}>Document Inputs</h2>
+              <div style={{ fontSize: '0.875rem', color: 'var(--primary)', fontWeight: 600 }}>{patientName}</div>
+            </div>
             <FileUp size={20} color="var(--primary)" />
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', flex: 1 }}>
-            <div style={{ background: 'var(--neutral-300)', padding: '1.25rem', borderRadius: '16px', display: 'flex', alignItems: 'center', gap: '1rem', border: '1px solid var(--neutral-400)' }}>
-              <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <FileText color="var(--secondary)" size={20} />
+            {documents.map((doc) => (
+              <div key={doc.id} style={{ background: 'var(--neutral-300)', padding: '1.25rem', borderRadius: '16px', display: 'flex', alignItems: 'center', gap: '1rem', border: '1px solid var(--neutral-400)' }}>
+                <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {doc.icon}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>{doc.name}</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px' }}>
+                    {doc.content}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }} title="Edit">
+                    <Pencil size={16} color="var(--text-muted)" />
+                  </button>
+                  {doc.type === 'bill' && doc.url ? (
+                    <CheckCircle2 color="#2e7d32" size={20} onClick={() => window.open(doc.url, '_blank')} style={{ cursor: 'pointer' }} />
+                  ) : (
+                    <CheckCircle2 color="#2e7d32" size={20} />
+                  )}
+                </div>
               </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>Medical_Diagnosis.pdf</div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>2.4 MB • System</div>
-              </div>
-              <CheckCircle2 color="#2e7d32" size={20} />
-            </div>
-
-            <div style={{ background: 'var(--neutral-300)', padding: '1.25rem', borderRadius: '16px', display: 'flex', alignItems: 'center', gap: '1rem', border: '1px solid var(--neutral-400)' }}>
-              <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <BriefcaseMedical color="var(--secondary)" size={20} />
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>Patient_Policy.pdf</div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>1.1 MB • Policy</div>
-              </div>
-              <CheckCircle2 color="#2e7d32" size={20} />
-            </div>
-
-            <div style={{ background: 'var(--neutral-300)', padding: '1.25rem', borderRadius: '16px', display: 'flex', alignItems: 'center', gap: '1rem', border: '1px dashed var(--primary)', opacity: 0.7 }}>
-              <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <ReceiptText color="var(--text-muted)" size={20} />
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>Medical_Bill.pdf</div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Awaiting Integration</div>
-              </div>
-              <Circle color="var(--primary)" size={20} />
-            </div>
+            ))}
 
             <button style={{ background: 'white', border: '1px solid var(--neutral-400)', padding: '1.25rem', borderRadius: '9999px', color: 'var(--secondary)', fontWeight: 600, marginTop: 'auto', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem' }}>
-              + Add Document
+              <Plus size={20} /> Add Document
             </button>
           </div>
         </div>

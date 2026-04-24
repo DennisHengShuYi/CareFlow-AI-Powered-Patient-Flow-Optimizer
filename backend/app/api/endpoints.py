@@ -1117,7 +1117,7 @@ async def get_active_patients():
         response = await supabase_rest.query_table(
             "patients",
             {
-                "select": "id, full_name, age, category, status, insurers, medical_cases(id, title, department, status, workflow_status, has_medical_bill, medical_bill_price, created_at, medical_bills(file_url, total_bill))",
+                "select": "id, full_name, age, category, status, insurers, medical_cases(id, title, department, status, workflow_status, has_medical_bill, medical_bill_price, doctor_diagnosis, created_at, medical_bills(file_url, total_bill, case_id))",
                 "status": "eq.active",
                 "order": "created_at.desc"
             }
@@ -1147,6 +1147,7 @@ async def get_active_patients():
                           "workflow_status": c.get("workflow_status"),
                           "has_medical_bill": c.get("has_medical_bill"),
                           "medical_bill_price": c.get("medical_bill_price"),
+                          "doctor_diagnosis": c.get("doctor_diagnosis"),
                           "bill_url": next((b.get("file_url") for b in c.get("medical_bills", []) if b.get("case_id") == c.get("id")), 
                                           c.get("medical_bills", [{}])[0].get("file_url") if c.get("medical_bills") else None),
                           "created_at": c.get("created_at")

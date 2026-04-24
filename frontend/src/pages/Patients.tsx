@@ -16,7 +16,8 @@ import {
   Trash2,
   Receipt,
   UploadCloud,
-  FileText
+  FileText,
+  BriefcaseMedical
 } from 'lucide-react';
 
 interface Case {
@@ -29,6 +30,7 @@ interface Case {
   hasMedicalBill: boolean;
   medicalBillPrice?: number;
   billUrl?: string;
+  doctorDiagnosis?: string;
 }
 
 interface Patient {
@@ -103,7 +105,8 @@ const fetchPatients = async (): Promise<Patient[]> => {
         claimStatus: 'none',
         totalBill: typeof c.medical_bill_price === 'number' ? c.medical_bill_price : parseFloat(c.medical_bill_price || '0'),
         hasMedicalBill: c.has_medical_bill ?? false,
-        billUrl: c.bill_url
+        billUrl: c.bill_url,
+        doctorDiagnosis: c.doctor_diagnosis
       }));
       return {
         id: p.id,
@@ -329,10 +332,7 @@ export default function Patients() {
 
   const selectedPatient = patients.find(p => p.id === selectedPatientId) ?? null;
 
-  const renderStatus = (
-    status: 'none' | 'requested' | 'approved',
-    type: 'GL' | 'Claim'
-  ) => {
+  const renderStatus = (status: 'none' | 'requested' | 'approved', type: 'GL' | 'Claim', p: Patient, c: Case) => {
     const colors = {
       none: { bg: 'var(--neutral-400)', text: 'var(--text-muted)' },
       requested: { bg: '#FFF9C4', text: '#F9A825' },
@@ -356,11 +356,25 @@ export default function Patients() {
           {status}
         </div>
         {status === 'requested' && (
-          <button style={{
-            marginTop: '4px', backgroundColor: 'var(--primary)', color: 'white',
-            padding: '0.5rem 1rem', borderRadius: '8px', fontSize: '0.875rem',
-            fontWeight: 700, width: '100%', boxShadow: '0 4px 10px rgba(30,136,229,0.2)'
-          }}>
+          <button 
+            onClick={() => {
+              navigate('/claims', { 
+                state: { 
+                  patientName: p.name,
+                  diagnosis: c.doctorDiagnosis || 'Pending Diagnosis',
+                  insurers: p.insurers,
+                  billUrl: c.billUrl,
+                  billPrice: c.totalBill
+                } 
+              });
+            }}
+            style={{
+              marginTop: '4px', backgroundColor: 'var(--primary)', color: 'white',
+              padding: '0.5rem 1rem', borderRadius: '8px', fontSize: '0.875rem',
+              fontWeight: 700, width: '100%', boxShadow: '0 4px 10px rgba(30,136,229,0.2)',
+              cursor: 'pointer', border: 'none'
+            }}
+          >
             Generate
           </button>
         )}
@@ -676,7 +690,7 @@ export default function Patients() {
                             onClick={() => {
                               setEditingCaseId(c.id);
                               setEditCaseTitle(c.type);
-                              setEditCaseDept(c.department);
+                              setEditCaseDepartment(c.department);
                               setIsEditCaseModalOpen(true);
                             }}
                             style={{ background: 'var(--neutral-300)', border: 'none', padding: '8px', borderRadius: '8px', cursor: 'pointer', color: 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
@@ -727,8 +741,8 @@ export default function Patients() {
                           </button>
                         </div>
 
-                        {renderStatus(c.glStatus, 'GL')}
-                        {renderStatus(c.claimStatus, 'Claim')}
+                        {renderStatus(c.glStatus, 'GL', selectedPatient, c)}
+                        {renderStatus(c.claimStatus, 'Claim', selectedPatient, c)}
 
                         <div style={{ textAlign: 'right' }}>
                           <div style={{
