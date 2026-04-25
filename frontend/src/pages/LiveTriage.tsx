@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { Link } from 'react-router-dom';
-import { useAuth } from '@clerk/clerk-react';
-import LayoutSidebar from '../components/LayoutSidebar';
-import { capacityRoomStyle } from '../utils/capacityRoomStyle';
+import { useState, useEffect, useCallback, useRef } from "react";
+import { Link } from "react-router-dom";
+import { useAuth } from "@clerk/clerk-react";
+import LayoutSidebar from "../components/LayoutSidebar";
+import { capacityRoomStyle } from "../utils/capacityRoomStyle";
 import {
   Filter,
   Mic,
@@ -15,9 +15,20 @@ import {
   CheckCircle,
   XCircle,
 } from "lucide-react";
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+} from "recharts";
 
-const API = 'http://127.0.0.1:8002';
+const API = "http://127.0.0.1:8002";
 
 export default function LiveTriage() {
   type Toast = { type: "success" | "error"; message: string };
@@ -49,7 +60,9 @@ export default function LiveTriage() {
   const [showOverrideModal, setShowOverrideModal] = useState(false);
   const [overridePatient, setOverridePatient] = useState<any>(null);
   const [overrideLevel, setOverrideLevel] = useState(3);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
+    null,
+  );
   const [overrideDiagnosis, setOverrideDiagnosis] = useState("");
   const [overrideDeptId, setOverrideDeptId] = useState("");
   const [overrideDocId, setOverrideDocId] = useState("");
@@ -62,15 +75,21 @@ export default function LiveTriage() {
   const [allDoctors, setAllDoctors] = useState<any[]>([]);
   const [filteredDoctors, setFilteredDoctors] = useState<any[]>([]);
   const [toast, setToast] = useState<Toast | null>(null);
-  const [overrideErrors, setOverrideErrors] = useState<{[key: string]: string;}>({});
-  
+  const [overrideErrors, setOverrideErrors] = useState<{
+    [key: string]: string;
+  }>({});
+
   const showToast = (type: "success" | "error", message: string) => {
     setToast({ type, message });
     setTimeout(() => setToast(null), 4000);
   };
   const [dashboardTab, setDashboardTab] = useState<"flow" | "capacity">("flow");
-  const [boardData, setBoardData] = useState<{ departments: any[] } | null>(null,);
-  const [utilizationHistory, setUtilizationHistory] = useState<Array<{ time: string; utilization: number }>>([]);
+  const [boardData, setBoardData] = useState<{ departments: any[] } | null>(
+    null,
+  );
+  const [utilizationHistory, setUtilizationHistory] = useState<
+    Array<{ time: string; utilization: number }>
+  >([]);
 
   useEffect(() => {
     if (boardData?.departments) {
@@ -159,7 +178,10 @@ export default function LiveTriage() {
         minute: "2-digit",
       });
       setUtilizationHistory((prev) => {
-        const next = [...prev, { time: nowLabel, utilization: nextUtilization }];
+        const next = [
+          ...prev,
+          { time: nowLabel, utilization: nextUtilization },
+        ];
         return next.slice(-6);
       });
 
@@ -385,7 +407,7 @@ export default function LiveTriage() {
       // ⚠️ CASE: already in queue (you handled in backend)
       if (data?.status === "exists") {
         showToast("error", "Patient already in queue");
-        return; 
+        return;
       }
 
       // ✅ SUCCESS
@@ -415,17 +437,23 @@ export default function LiveTriage() {
     // This auto-assigns a department and available doctor using AI, then moves the patient to In Consult
     try {
       const token = await getToken();
-      const response = await fetch(`${API}/api/triage/auto_assign/${patientId}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+      const response = await fetch(
+        `${API}/api/triage/auto_assign/${patientId}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
         },
-      });
+      );
 
       if (!response.ok) {
         console.error("Auto assign failed", response.status);
-        showToast("error", "Unable to auto assign patient. Falling back to consult status.");
+        showToast(
+          "error",
+          "Unable to auto assign patient. Falling back to consult status.",
+        );
         await fetch(`${API}/api/triage/override/${patientId}`, {
           method: "POST",
           headers: {
@@ -440,7 +468,7 @@ export default function LiveTriage() {
         if (assignment) {
           showToast(
             "success",
-            `Assigned to ${assignment.department_name} with Dr ${assignment.doctor_name}`,
+            `Assigned to ${assignment.department_name} with ${assignment.doctor_name}`,
           );
         }
       }
@@ -462,20 +490,23 @@ export default function LiveTriage() {
     if (!encounterToSign) return;
     try {
       const token = await getToken();
-      const response = await fetch(`${API}/api/triage/sign_note/${encounterToSign.id}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+      const response = await fetch(
+        `${API}/api/triage/sign_note/${encounterToSign.id}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            assessment_plan: `${assessment}\n\n${plan}`.trim(),
+            subjective: aiSource?.subjective || "",
+            objective_note: objectiveNote,
+            assessment,
+            plan,
+          }),
         },
-        body: JSON.stringify({
-          assessment_plan: `${assessment}\n\n${plan}`.trim(),
-          subjective: aiSource?.subjective || "",
-          objective_note: objectiveNote,
-          assessment,
-          plan,
-        }),
-      });
+      );
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -538,14 +569,17 @@ export default function LiveTriage() {
 
     try {
       const token = await getToken();
-      const response = await fetch(`${API}/api/triage/generate_soap/${encounterId}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+      const response = await fetch(
+        `${API}/api/triage/generate_soap/${encounterId}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ objective_note: payloadObjective }),
         },
-        body: JSON.stringify({ objective_note: payloadObjective }),
-      });
+      );
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -557,11 +591,14 @@ export default function LiveTriage() {
 
       const json = await response.json();
       setAiScribe(json);
-      setAiStatus("SOAP draft generated by Z.ai");
+      setAiStatus("SOAP draft generated.");
       setAssessment(json.assessment || "");
       setPlan(json.plan || "");
       if (json.subjective) {
         setAiScribe((prev: any) => ({ ...prev, subjective: json.subjective }));
+      }
+      if (json.objective) {
+        setObjectiveNote(json.objective);
       }
     } catch (err) {
       console.error("Generate SOAP error:", err);
@@ -572,8 +609,11 @@ export default function LiveTriage() {
     }
   };
 
-  const selectedEncounter = data?.patients?.find((p: any) => p.id === selectedSessionId) || data?.active_encounter;
-  const aiSource = aiScribe || data?.ai_scribe || { status: aiStatus, subjective: null };
+  const selectedEncounter =
+    data?.patients?.find((p: any) => p.id === selectedSessionId) ||
+    data?.active_encounter;
+  const aiSource = aiScribe ||
+    data?.ai_scribe || { status: aiStatus, subjective: null };
 
   const formatRecTime = (sec: number) => {
     const m = Math.floor(sec / 60);
@@ -659,14 +699,17 @@ export default function LiveTriage() {
       setObjectiveNote(appendedText);
 
       setAiStatus("Generating SOAP from transcript...");
-      const soapRes = await fetch(`${API}/api/triage/generate_soap/${encounterId}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+      const soapRes = await fetch(
+        `${API}/api/triage/generate_soap/${encounterId}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ objective_note: appendedText }),
         },
-        body: JSON.stringify({ objective_note: appendedText }),
-      });
+      );
 
       if (!soapRes.ok) {
         const errorText = await soapRes.text();
@@ -679,7 +722,13 @@ export default function LiveTriage() {
       setAssessment(soapJson.assessment || "");
       setPlan(soapJson.plan || "");
       if (soapJson.subjective) {
-        setAiScribe((prev: any) => ({ ...prev, subjective: soapJson.subjective }));
+        setAiScribe((prev: any) => ({
+          ...prev,
+          subjective: soapJson.subjective,
+        }));
+      }
+      if (soapJson.objective) {
+        setObjectiveNote(soapJson.objective);
       }
       showToast("success", "Audio transcribed and SOAP note generated.");
     } catch (err) {
@@ -728,7 +777,9 @@ export default function LiveTriage() {
       setRecordingActive(true);
     } catch (err) {
       console.error("Failed to start audio recording:", err);
-      setRecordingError("Unable to access microphone. Please allow microphone permission.");
+      setRecordingError(
+        "Unable to access microphone. Please allow microphone permission.",
+      );
     }
   };
 
@@ -747,7 +798,10 @@ export default function LiveTriage() {
   };
 
   const stopRecordingAndInsert = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state !== "inactive"
+    ) {
       mediaRecorderRef.current.stop();
       setRecordingModalOpen(false);
       setRecordingActive(false);
@@ -765,7 +819,10 @@ export default function LiveTriage() {
 
   useEffect(() => {
     return () => {
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      if (
+        mediaRecorderRef.current &&
+        mediaRecorderRef.current.state !== "inactive"
+      ) {
         mediaRecorderRef.current.stop();
       }
       mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
@@ -776,8 +833,8 @@ export default function LiveTriage() {
     return (
       <LayoutSidebar>
         <div
-          className="responsive-padding"
           style={{
+            padding: "2rem 3rem",
             height: "100%",
             display: "flex",
             alignItems: "center",
@@ -839,7 +896,8 @@ export default function LiveTriage() {
   // Build dynamic staff data from board
   const staffData =
     board?.departments.map((dept: any) => {
-      const totalDoctors = dept.doctors?.length || dept.metrics?.doctors_total || 0;
+      const totalDoctors =
+        dept.doctors?.length || dept.metrics?.doctors_total || 0;
       const busyRoomsCount =
         dept.metrics?.doctors_in_consult ??
         (dept.rooms || []).reduce((count: number, r: any) => {
@@ -900,8 +958,8 @@ export default function LiveTriage() {
       )}
 
       <div
-        className="responsive-padding live-triage-page"
         style={{
+          padding: "2rem 3rem",
           height: "100%",
           display: "flex",
           flexDirection: "column",
@@ -1007,10 +1065,7 @@ export default function LiveTriage() {
               </div>
             )}
           </div>
-          <div
-            className="triage-top-actions"
-            style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}
-          >
+          <div style={{ display: "flex", gap: "1rem" }}>
             <button
               onClick={() => setShowAddModal(true)}
               className="btn-primary"

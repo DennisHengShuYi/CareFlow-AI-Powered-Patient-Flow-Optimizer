@@ -333,8 +333,12 @@ class CareFlowService:
                 for doc in available_doctors
             ]
 
-            if not department_list or not doctor_list:
-                return None
+            if not department_list:
+                print("DEBUG: [auto_assign_patient] no departments found, using fallback department")
+                department_list = [{"id": None, "name": "General"}]
+            if not doctor_list:
+                print("DEBUG: [auto_assign_patient] no doctors found, using fallback doctor")
+                doctor_list = [{"id": None, "name": "Unassigned", "department_id": None, "specialty": ""}]
 
             system = (
                 "You are an expert clinical assignment assistant for a hospital triage workflow. "
@@ -357,6 +361,7 @@ class CareFlowService:
             )
 
             raw = await llm.generate(prompt, system, response_format="json")
+            print(f"DEBUG: [auto_assign_patient] LLM raw response: {raw}")
             assignment = None
             if isinstance(raw, str):
                 try:
@@ -365,16 +370,20 @@ class CareFlowService:
                     import re
                     match = re.search(r"\{.*\}", raw, re.S)
                     if match:
-                        assignment = json.loads(match.group(0))
+                        try:
+                            assignment = json.loads(match.group(0))
+                        except json.JSONDecodeError:
+                            assignment = None
             elif isinstance(raw, dict):
                 assignment = raw
 
             if not assignment:
-                return None
+                print("DEBUG: [auto_assign_patient] LLM assignment parse failed or empty; falling back to default selection.")
+                assignment = {}
 
-            department_name = (assignment.get("department_name") or "").strip()
-            doctor_name = (assignment.get("doctor_name") or "").strip()
-            reasoning = assignment.get("reasoning") or assignment.get("reason") or ""
+            department_name = (assignment.get("department_name") or assignment.get("department") or "").strip()
+            doctor_name = (assignment.get("doctor_name") or assignment.get("doctor") or "").strip()
+            reasoning = assignment.get("reasoning") or assignment.get("reason") or "Fallback assignment due to missing or invalid AI response."
 
             def find_department(name: str):
                 if not name:
@@ -405,15 +414,20 @@ class CareFlowService:
                 return doctor_list[0]
 
             chosen_doctor = find_doctor(doctor_name, chosen_department["id"] if chosen_department else None)
+            if chosen_doctor is None and doctor_list:
+                chosen_doctor = doctor_list[0]
+
+            print(f"DEBUG: [auto_assign_patient] chosen_department={chosen_department}, chosen_doctor={chosen_doctor}, reasoning={reasoning}")
 
             update_data = {"status": "In Consult"}
-            if chosen_department:
+            if chosen_department and chosen_department.get("id") is not None:
                 update_data["department_id"] = chosen_department["id"]
-            if chosen_doctor:
+            if chosen_doctor and chosen_doctor.get("id") is not None:
                 update_data["doctor_id"] = chosen_doctor["id"]
 
             result = await supabase_rest.update_table("sessions", str(session_id), update_data)
             if not result:
+                print(f"ERROR: [auto_assign_patient] supabase update failed for session {session_id} with data {update_data}")
                 return None
 
             return {
@@ -654,11 +668,14 @@ class CareFlowService:
         prompt = (
             "You are a clinical assistant that generates professional SOAP notes for emergency triage encounters. "
             "Draft a short, focused SOAP note from the patient encounter details below. "
-            "Return only a JSON object with keys: subjective, assessment, plan. "
+            "Return only a JSON object with keys: subjective, objective, assessment, plan. "
             "Do not include any additional explanation outside the JSON object. "
             "Use precise physician-style clinical language. "
             "Ignore conversational fillers, greetings, bedside banter, and direct patient quotes unless they contain relevant clinical findings. "
-            "Do not reproduce phrases like 'okay', 'hi there', 'I'm sorry', or 'please' in the final note.\n\n"
+            "When the intake note contains repeated words or non-clinical noise, extract the meaningful history and discard the noise. "
+            "If the note is patient-reported history or symptoms, place it under subjective. "
+            "If it is exam findings, place it under objective. "
+            "If no objective findings are present, set objective to 'No objective findings documented.'\n\n"
             f"Patient name: {patient.get('full_name', 'Unknown')}\n"
             f"Patient phone: {patient.get('phone', 'Unknown')}\n"
             f"Patient email: {patient.get('email', 'Unknown')}\n"
@@ -669,8 +686,8 @@ class CareFlowService:
             f"Status: {session.get('status', 'Unknown')}\n"
             f"Complaint: {complaint}\n"
             f"Vitals: blood pressure={vitals['blood_pressure']}, heart rate={vitals['heart_rate']}, oxygen saturation={vitals['oxygen_saturation']}\n"
-            f"Objective findings: {objective_note or 'None'}\n"
-            "Summarize exam findings and plan concisely."
+            f"Clinical notes: {objective_note or 'None'}\n"
+            "Use the clinical notes to complete subjective and objective sections appropriately."
         )
 
         system = (
@@ -698,6 +715,7 @@ class CareFlowService:
         return {
             "status": "soap_generated",
             "subjective": note.get("subjective", ""),
+            "objective": note.get("objective", ""),
             "assessment": note.get("assessment", ""),
             "plan": note.get("plan", ""),
         }
@@ -786,7 +804,7 @@ class CareFlowService:
                 # OPTIONAL: update latest info
                 await supabase_rest.update_table(
                     "patients",
-                    {"id": patient_id},
+                    patient_id,
                     {
                         "full_name": name,
                         "phone": phone,
@@ -797,8 +815,9 @@ class CareFlowService:
             else:
                 print("🆕 Creating new patient")
 
+                # Supabase patients table does not expose hospital_id in this schema.
+                # The patient is linked to a hospital via the session record instead.
                 patient_data = {
-                    "hospital_id": hospital_id_str,   # ✅ STRING
                     "full_name": name,
                     "ic_number": ic_number,
                     "phone": phone,
