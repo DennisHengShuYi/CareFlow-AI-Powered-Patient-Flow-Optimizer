@@ -904,29 +904,14 @@ export default function LiveTriage() {
   // Build dynamic staff data from board
   const staffData =
     board?.departments.map((dept: any) => {
-      const totalDoctors =
-        dept.doctors?.length || dept.metrics?.doctors_total || 0;
-      const busyRoomsCount =
-        dept.metrics?.doctors_in_consult ??
-        (dept.rooms || []).reduce((count: number, r: any) => {
-          return count + (r.in_consult && r.in_consult.length > 0 ? 1 : 0);
-        }, 0);
-
-      const busyPatientCount =
-        data?.patients?.filter(
-          (p: any) =>
-            p.status === "In Consult" &&
-            String(p.department || "").toLowerCase() ===
-              String(dept.name || "").toLowerCase(),
-        ).length || 0;
-
-      const busyCount = Math.max(busyRoomsCount, busyPatientCount);
-      const availableDoctors = Math.max(totalDoctors - busyCount, 0);
+      const totalRooms = dept.metrics?.rooms_total || 0;
+      const occupiedRooms = dept.metrics?.rooms_occupied || 0;
+      const availableRooms = Math.max(totalRooms - occupiedRooms, 0);
 
       return {
         label: dept.name,
-        current: availableDoctors,
-        total: totalDoctors,
+        current: availableRooms,
+        total: totalRooms,
         color: "var(--primary)",
       };
     }) || [];
@@ -1122,40 +1107,6 @@ export default function LiveTriage() {
                 </div>
                 <div style={{ fontSize: "1.25rem", fontWeight: 700 }}>
                   {data.queue_active} Active
-                </div>
-              </div>
-            </div>
-            <div
-              className="card"
-              style={{
-                padding: "0.75rem 1.5rem",
-                display: "flex",
-                alignItems: "center",
-                gap: "1rem",
-                borderRadius: "9999px",
-              }}
-            >
-              <div>
-                <div
-                  style={{
-                    fontSize: "0.65rem",
-                    textTransform: "uppercase",
-                    color: "var(--text-muted)",
-                  }}
-                >
-                  Daily Clinic Load
-                </div>
-                <div style={{ fontSize: "1.25rem", fontWeight: 700 }}>
-                  {data.queue_active} / {effectiveClinicCapacity}{" "}
-                  <span
-                    style={{
-                      fontSize: "0.875rem",
-                      fontWeight: 500,
-                      color: "var(--text-muted)",
-                    }}
-                  >
-                    Booked
-                  </span>
                 </div>
               </div>
             </div>
