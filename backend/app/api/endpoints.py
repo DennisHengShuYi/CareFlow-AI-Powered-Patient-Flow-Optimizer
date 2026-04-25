@@ -1209,6 +1209,22 @@ async def override_patient(patient_id: str, req: OverridePatientRequest, user_id
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to override patient: {str(e)}")
 
+class UpdateVitalsRequest(BaseModel):
+    blood_pressure: str | None = None
+    heart_rate: str | None = None
+    oxygen_saturation: str | None = None
+
+@router.patch("/api/patients/{patient_id}/vitals")
+async def update_patient_vitals(patient_id: str, req: UpdateVitalsRequest, user_id: str = Depends(verify_clerk_token)):
+    try:
+        async with AsyncSessionLocal() as db:
+            success = await CareFlowService.update_patient_vitals(db, uuid.UUID(patient_id), req.dict(exclude_none=True))
+            return {"success": success}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid patient ID format: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update vitals: {str(e)}")
+
 @router.post("/api/triage/auto_assign/{patient_id}")
 async def auto_assign_patient(patient_id: str, user_id: str = Depends(verify_clerk_token)):
     try:

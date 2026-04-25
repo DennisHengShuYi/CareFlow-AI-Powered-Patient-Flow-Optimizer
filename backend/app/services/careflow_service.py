@@ -119,7 +119,10 @@ class CareFlowService:
                 "assigned_doctor": doc_name,
                 "status": s.get("status", "In Consult"),
                 "is_active": True,
-                "type": "walk-in"
+                "type": "walk-in",
+                "triage_result": triage_res,
+                "metadata_data": metadata,
+                "ai_reasoning": triage_res.get("reasoning")
             })
 
         # Process Appointments
@@ -156,7 +159,10 @@ class CareFlowService:
                 "assigned_doctor": doc_name,
                 "status": "Awaiting Arrival",
                 "is_active": False,
-                "type": "appointment"
+                "type": "appointment",
+                "triage_result": {},
+                "metadata_data": {"complaint": a.get("chief_complaint")},
+                "ai_reasoning": None
             })
 
         # Final sorting: Urgency first (P1 top), then Arrival/Appt time
@@ -331,20 +337,71 @@ class CareFlowService:
 
     @staticmethod
     async def override_patient(db: AsyncSession, session_id: uuid.UUID, data: dict):
-        """Update a specific triage session via REST API."""
+        """Update a specific triage session or appointment via REST API."""
         try:
-            update_data = {}
-            if "level" in data: update_data["urgency_level"] = f"P{data['level']}"
-            if "department_id" in data: update_data["department_id"] = data["department_id"]
-            if "doctor_id" in data: update_data["doctor_id"] = data["doctor_id"]
-            if "status" in data: update_data["status"] = data["status"]
+            # Check if it's a session
+            is_session = await supabase_rest.query_table("sessions", {"id": f"eq.{session_id}", "select": "id,triage_result"})
+            if is_session:
+                update_data = {}
+                if "level" in data: update_data["urgency_level"] = f"P{data['level']}"
+                if "department_id" in data: update_data["department_id"] = data["department_id"]
+                if "doctor_id" in data: update_data["doctor_id"] = data["doctor_id"]
+                if "status" in data: update_data["status"] = data["status"]
+                
+                # Update diagnosis in triage_result if provided
+                if "diagnosis" in data and data["diagnosis"]:
+                    triage_res = is_session[0].get("triage_result") or {}
+                    triage_res["preliminary_diagnosis"] = data["diagnosis"]
+                    update_data["triage_result"] = triage_res
 
-            if update_data:
-                result = await supabase_rest.update_table("sessions", update_data, str(session_id))
-                return result is not None
+                if update_data:
+                    result = await supabase_rest.update_table("sessions", update_data, str(session_id))
+                    return result is not None
+                return True
+
+            # Check if it's an appointment
+            is_appt = await supabase_rest.query_table("appointments", {"id": f"eq.{session_id}", "select": "id"})
+            if is_appt:
+                update_data = {}
+                if "level" in data: update_data["urgency_level"] = f"P{data['level']}"
+                if "department_id" in data: update_data["department_id"] = data["department_id"]
+                if "doctor_id" in data: update_data["doctor_id"] = data["doctor_id"]
+                # Appointments use "Scheduled", "Arrived", etc. Ignore "Awaiting Arrival" from frontend.
+                if "status" in data and data["status"] != "Awaiting Arrival": 
+                    update_data["status"] = data["status"]
+                if "diagnosis" in data and data["diagnosis"] and data["diagnosis"] != "Scheduled":
+                    update_data["chief_complaint"] = data["diagnosis"]
+
+                if update_data:
+                    result = await supabase_rest.update_table("appointments", update_data, str(session_id))
+                    return result is not None
+                return True
+
             return False
         except Exception as e:
             print(f"ERROR in override_patient: {e}")
+            return False
+
+    @staticmethod
+    async def update_patient_vitals(db: AsyncSession, patient_id: uuid.UUID, vitals: dict):
+        """Update a patient's vitals in their metadata_data via REST API."""
+        try:
+            # Get existing patient to preserve other metadata
+            patient_records = await supabase_rest.query_table("patients", {"id": f"eq.{patient_id}", "select": "metadata_data"})
+            if not patient_records:
+                return False
+                
+            metadata = patient_records[0].get("metadata_data") or {}
+            
+            # Update vitals
+            if "blood_pressure" in vitals: metadata["blood_pressure"] = vitals["blood_pressure"]
+            if "heart_rate" in vitals: metadata["heart_rate"] = vitals["heart_rate"]
+            if "oxygen_saturation" in vitals: metadata["oxygen_saturation"] = vitals["oxygen_saturation"]
+            
+            result = await supabase_rest.update_table("patients", {"metadata_data": metadata}, str(patient_id))
+            return result is not None
+        except Exception as e:
+            print(f"ERROR in update_patient_vitals: {e}")
             return False
 
     @staticmethod
