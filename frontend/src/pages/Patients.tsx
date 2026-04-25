@@ -46,6 +46,7 @@ interface Patient {
   caseCount: number;
   diagnoses: string[];
   insurers: string[];
+  doctorInCharge?: string;
   cases: Case[];
   type: 'inpatient' | 'outpatient' | 'emergency';
   policy_url?: string;
@@ -128,6 +129,7 @@ const fetchPatients = async (): Promise<Patient[]> => {
         caseCount: cases.length,
         diagnoses: p.diagnoses ?? [],
         insurers: p.insurers ?? [],
+        doctorInCharge: p.doctor_in_charge ?? undefined,
         policy_url: p.policy_url ?? undefined,
         type, // ✅ use group key, not p.category (often null)
         cases
@@ -161,6 +163,7 @@ export default function Patients() {
   const [isEditPatientModalOpen, setIsEditPatientModalOpen] = useState(false);
   const [editPatientName, setEditPatientName] = useState('');
   const [editPatientInsurers, setEditPatientInsurers] = useState('');
+  const [editPatientDoctorInCharge, setEditPatientDoctorInCharge] = useState('');
   const [editPolicyFile, setEditPolicyFile] = useState<File | null>(null);
   const [isPolicyUploading, setIsPolicyUploading] = useState(false);
   const [policyUploadSuccess, setPolicyUploadSuccess] = useState(false);
@@ -243,7 +246,8 @@ export default function Patients() {
         },
         body: JSON.stringify({
           full_name: editPatientName,
-          insurers: editPatientInsurers.split(',').map(i => i.trim()).filter(i => i)
+          insurers: editPatientInsurers.split(',').map(i => i.trim()).filter(i => i),
+          doctor_in_charge: editPatientDoctorInCharge
         })
       });
       if (!response.ok) throw new Error('Failed to update patient');
@@ -584,6 +588,7 @@ export default function Patients() {
                       onClick={() => {
                         setEditPatientName(selectedPatient.name);
                         setEditPatientInsurers(selectedPatient.insurers.join(', '));
+                        setEditPatientDoctorInCharge(selectedPatient.doctorInCharge || '');
                         setIsEditPatientModalOpen(true);
                       }}
                       style={{ background: 'none', border: 'none', color: 'white', opacity: 0.7, cursor: 'pointer', padding: '4px' }}
@@ -595,6 +600,10 @@ export default function Patients() {
                     <div>
                       <div style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.8, textTransform: 'uppercase' }}>Patient Age</div>
                       <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{selectedPatient.age} Years</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.8, textTransform: 'uppercase' }}>Dr. In Charge</div>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{selectedPatient.doctorInCharge || 'Unassigned'}</div>
                     </div>
                     <div>
                       <div style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.8, textTransform: 'uppercase' }}>Total Cases</div>
@@ -964,6 +973,11 @@ export default function Patients() {
               <div style={{ marginBottom: '1.25rem' }}>
                 <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, marginBottom: '0.5rem', color: 'var(--text-muted)' }}>INSURERS (comma separated)</label>
                 <input type="text" value={editPatientInsurers} onChange={e => setEditPatientInsurers(e.target.value)} placeholder="e.g. Allianz, AIA" style={{ width: '100%', padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--neutral-400)' }} />
+              </div>
+              {/* Doctor In Charge */}
+              <div style={{ marginBottom: '1.25rem' }}>
+                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, marginBottom: '0.5rem', color: 'var(--text-muted)' }}>DOCTOR IN CHARGE</label>
+                <input type="text" value={editPatientDoctorInCharge} onChange={e => setEditPatientDoctorInCharge(e.target.value)} placeholder="e.g. Dr. John Doe" style={{ width: '100%', padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--neutral-400)' }} />
               </div>
               {/* Policy PDF */}
               <div style={{ marginBottom: '1.75rem' }}>

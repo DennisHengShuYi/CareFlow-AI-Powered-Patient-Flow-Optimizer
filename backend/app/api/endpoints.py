@@ -250,6 +250,7 @@ class UpdateCaseRequest(BaseModel):
 class UpdatePatientRequest(BaseModel):
     full_name: str | None = None
     insurers: list[str] | None = None
+    doctor_in_charge: str | None = None
 
 
 
@@ -1131,7 +1132,7 @@ async def get_active_patients():
         response = await supabase_rest.query_table(
             "patients",
             {
-                "select": "id, full_name, age, category, status, insurers, policy_url, medical_cases(id, title, department, status, workflow_status, has_medical_bill, medical_bill_price, doctor_diagnosis, diagnosis_pdf_url, generated_doc_url, claim_type, created_at, medical_bills(file_url, total_bill, case_id))",
+                "select": "id, full_name, age, category, status, insurers, doctor_in_charge, policy_url, medical_cases(id, title, department, status, workflow_status, has_medical_bill, medical_bill_price, doctor_diagnosis, diagnosis_pdf_url, generated_doc_url, claim_type, created_at, medical_bills(file_url, total_bill, case_id))",
                 "status": "eq.active",
                 "order": "created_at.desc"
             }
@@ -1142,6 +1143,8 @@ async def get_active_patients():
             "inpatient": [],
             "outpatient": []
         }
+        
+        all_cases = []
 
         for p in response:
             # We explicitly define the keys to prevent "all columns" from leaking
@@ -1151,6 +1154,7 @@ async def get_active_patients():
                 "age": p.get("age"),
                 "category": p.get("category"),
                 "insurers": p.get("insurers") or [],
+                "doctor_in_charge": p.get("doctor_in_charge"),
                 "policy_url": p.get("policy_url"),
                 "type": p.get("category", "outpatient"),
                 # This matches your UI where cases appear under the patient
@@ -1175,16 +1179,6 @@ async def get_active_patients():
                 ]
             }
             
-            # Check Redis for transient orchestration results
-            for case in clean_patient["cases"]:
-                cache = await redis_client.get_json(f"orchestration:{case['id']}")
-                if cache:
-                    case["confidence_score"] = cache.get("score", 0)
-                    case["ai_reasoning"] = cache.get("reasoning", "")
-                else:
-                    case["confidence_score"] = 0
-                    case["ai_reasoning"] = None
-
             # Use the Case Titles as "Diagnoses" for the UI summary for now
             clean_patient["diagnoses"] = [c["title"] for c in clean_patient["cases"]]
 
@@ -1193,6 +1187,21 @@ async def get_active_patients():
                 sidebar_data[cat].append(clean_patient)
             else:
                 sidebar_data["outpatient"].append(clean_patient)
+
+            # Collect all cases for bulk Redis fetching
+            all_cases.extend(clean_patient["cases"])
+
+        # Fetch all Redis orchestration caches in ONE single HTTP call!
+        if all_cases:
+            keys = [f"orchestration:{c['id']}" for c in all_cases]
+            caches = await redis_client.mget_json(keys)
+            for case, cache in zip(all_cases, caches):
+                if cache:
+                    case["confidence_score"] = cache.get("score", 0)
+                    case["ai_reasoning"] = cache.get("reasoning", "")
+                else:
+                    case["confidence_score"] = 0
+                    case["ai_reasoning"] = None
 
         return {
             "success": True,
@@ -1318,6 +1327,7 @@ async def update_patient_info(patient_id: str, body: UpdatePatientRequest):
         update_data = {}
         if body.full_name is not None: update_data["full_name"] = body.full_name
         if body.insurers is not None: update_data["insurers"] = body.insurers
+        if body.doctor_in_charge is not None: update_data["doctor_in_charge"] = body.doctor_in_charge
         
         if not update_data:
             return {"success": True, "message": "No changes provided"}
@@ -1552,7 +1562,7 @@ async def orchestrate_insurance_claim(case_id: str, body: dict):
         templates_context = []
         template_files = []
         if claim_type == "GL":
-            template_files = ["Hospital Admission Form Template.pdf", "Medical Referral Letter Template Doc.pdf"]
+            template_files = ["Hospital Admission Form.pdf", "Medical Referral Letter Template Doc.pdf"]
         else:
             template_files = ["medical-claim-doctors-statement.pdf"]
 
@@ -1564,26 +1574,53 @@ async def orchestrate_insurance_claim(case_id: str, body: dict):
         # 4. LLM Analysis & Form Filling
         all_context = "\n\n".join(source_text + templates_context)
         orchestration_prompt = f"""
-        You are a Medical Claims Specialist. 
-        TASK:
-        1. Analyze the SOURCE documents (Diagnosis, Bill, Policy).
-        2. Extract necessary fields (Patient Name, Policy No, ICD-10, Bill Total, etc.).
-        3. For EACH document in the TEMPLATE section, generate a "filled" version.
-        4. Preserve the exact headers and structure of the templates.
-        
-        Output format (JSON):
+You are a Medical Case Coordinator. 
+Your goal is to perform precision data extraction to generate a {claim_type} request.
+
+### STEP 1: DATA EXTRACTION
+Analyze the <SOURCE_DOCUMENTS> and prioritize the <OFFICIAL_PATIENT_DATA> to extract:
+- Patient demographics (Name, IC/Passport, DOB, Contact).
+- Clinical details (Diagnosis, ICD-10, symptoms, duration, findings).
+- Policy details (Policy number, resident status).
+
+### STEP 2: TEMPLATE MAPPING
+For each document in <TARGET_TEMPLATES>, fill the placeholders exactly.
+- **Checkboxes:** If data matches a checkbox option, replace [ ] with [x].
+- **Dotted Lines:** Replace the dots (e.g., Name.........) with the actual value.
+- **Missing Data:** If a required field is not found in the source, use "N/A".
+- **CLEANUP (CRITICAL):** Remove ALL brackets like [ ], ( ), and placeholder texts like "e.g." after filling in the details. Do not leave any blank brackets behind.
+
+### STEP 3: OUTPUT
+Return a JSON object containing the "filled" text. Do not summarize. Maintain exact spacing and headers.
+The "title" of the document MUST be the exact template name used.
+
+<OFFICIAL_PATIENT_DATA>
+{json.dumps(patient_data, indent=2)}
+</OFFICIAL_PATIENT_DATA>
+
+<SOURCE_DOCUMENTS>
+{source_text}
+</SOURCE_DOCUMENTS>
+
+<TARGET_TEMPLATES>
+{templates_context}
+</TARGET_TEMPLATES>
+
+CRITICAL: You are provided with {len(template_files)} template(s). You MUST return exactly {len(template_files)} object(s) in the "documents" array. Each object must correspond to one of the provided templates.
+
+Output format (JSON):
+{{
+    "confidence_score": 0-100,
+    "reasoning": "Specify which clinical fields were missing",
+    "documents": [
         {{
-            "confidence_score": 0-100,
-            "reasoning": "Explain the score and if any template fields couldn't be filled",
-            "documents": [
-                {{
-                    "title": "Document Title",
-                    "content": "Full text of the filled document..."
-                }}
-            ]
+            "title": "Exact Template Name",
+            "content": "Full filled text with all brackets removed..."
         }}
-        """
-        res_text = await llm.generate(all_context[:10000], orchestration_prompt, response_format="json")
+    ]
+}}
+"""
+        res_text = await llm.generate(all_context[:30000], orchestration_prompt, response_format="json")
         res_data = json.loads(res_text)
         
         # 5. Cache Score and Reasoning
@@ -1594,19 +1631,27 @@ async def orchestrate_insurance_claim(case_id: str, body: dict):
 
         # 6. PDF Generation (ReportLab)
         from reportlab.lib.pagesizes import LETTER
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
         from reportlab.lib.styles import getSampleStyleSheet
+        import time
+        import urllib.parse
         
-        buffer = BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=LETTER)
         styles = getSampleStyleSheet()
-        story = []
+        generated_urls = []
+        patient_name = patient_data.get("full_name", "Patient")
 
         for idx, g_doc in enumerate(res_data.get("documents", [])):
-            if idx > 0:
-                story.append(PageBreak())
+            doc_title = g_doc.get("title", f"Generated Form {idx+1}")
             
-            story.append(Paragraph(g_doc.get("title", "Generated Form"), styles['Title']))
+            # Ensure safe filenames: [Patient Name] - [Template Name]
+            safe_title = "".join([c for c in doc_title if c.isalnum() or c in (' ', '-', '_')]).strip()
+            safe_patient_name = "".join([c for c in patient_name if c.isalnum() or c in (' ', '-', '_')]).strip()
+            
+            buffer = BytesIO()
+            doc = SimpleDocTemplate(buffer, pagesize=LETTER)
+            story = []
+            
+            story.append(Paragraph(doc_title, styles['Title']))
             story.append(Spacer(1, 12))
             
             # Split content by lines and wrap in paragraphs
@@ -1620,25 +1665,35 @@ async def orchestrate_insurance_claim(case_id: str, body: dict):
                         story.append(Paragraph(line, styles['Normal']))
                     story.append(Spacer(1, 6))
 
-        doc.build(story)
-        pdf_bytes = buffer.getvalue()
-        buffer.close()
+            doc.build(story)
+            pdf_bytes = buffer.getvalue()
+            buffer.close()
 
-        # 7. Upload and Update
-        storage_path = f"generated/{case_id}_{claim_type.lower()}_{int(time.time())}.pdf"
-        await supabase_rest.upload_file("insurance_policies", storage_path, pdf_bytes, "application/pdf")
-        file_url = f"{supabase_rest.url}/storage/v1/object/public/insurance_policies/{storage_path}"
+            # Upload each file
+            # Format: [Patient Name] - [Template Name]_[timestamp].pdf
+            file_name = f"{safe_patient_name} - {safe_title}_{int(time.time())}.pdf".replace(" ", "_")
+            storage_path = f"generated/{file_name}"
+            await supabase_rest.upload_file("insurance_policies", storage_path, pdf_bytes, "application/pdf")
+            
+            # URL encode the filename to prevent spaces/special chars from breaking the URL string
+            encoded_path = urllib.parse.quote(storage_path)
+            file_url = f"{supabase_rest.url}/storage/v1/object/public/insurance_policies/{encoded_path}"
+            generated_urls.append(file_url)
 
+        # Join URLs by comma
+        final_urls_str = ",".join(generated_urls)
+
+        # 7. Update Database
         await supabase_rest.update_table("medical_cases", {
             "claim_type": claim_type,
-            "generated_doc_url": file_url
+            "generated_doc_url": final_urls_str
         }, {"id": f"eq.{case_id}"})
 
         return {
             "success": True, 
             "confidence_score": res_data.get("confidence_score"),
             "ai_reasoning": res_data.get("reasoning"),
-            "generated_doc_url": file_url
+            "generated_doc_url": final_urls_str
         }
 
     except Exception as e:
@@ -1706,15 +1761,25 @@ async def initiate_gl_request(case_id: str, body: dict):
                 msg['Subject'] = subject
                 msg.attach(MIMEText(email_body, 'plain'))
 
-                # Download PDF to attach
+                # Download PDFs to attach
                 async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.get(doc_url)
-                    if resp.status_code == 200:
-                        part = MIMEApplication(resp.content, Name=f"{claim_type}_Request_{case_id}.pdf")
-                        part['Content-Disposition'] = f'attachment; filename="{claim_type}_Request_{case_id}.pdf"'
-                        msg.attach(part)
-                    else:
-                        print(f"[INITIATE ERROR] Failed to download PDF for attachment. URL: {doc_url}")
+                    doc_urls = doc_url.split(',')
+                    for url in doc_urls:
+                        url = url.strip()
+                        if not url: continue
+                        
+                        resp = await client.get(url)
+                        if resp.status_code == 200:
+                            import urllib.parse
+                            # Extract filename from URL and decode it
+                            filename_encoded = url.split('/')[-1]
+                            filename = urllib.parse.unquote(filename_encoded)
+                            
+                            part = MIMEApplication(resp.content, Name=filename)
+                            part['Content-Disposition'] = f'attachment; filename="{filename}"'
+                            msg.attach(part)
+                        else:
+                            print(f"[INITIATE ERROR] Failed to download PDF for attachment. URL: {url}")
 
                 # Send
                 print(f"[INITIATE] Connecting to smtp.gmail.com:587 (STARTTLS)...")
@@ -1949,6 +2014,7 @@ async def get_archived_patients():
                     age,
                     category,
                     insurers,
+                    doctor_in_charge,
                     diagnoses,
                     medical_cases (
                         id,
