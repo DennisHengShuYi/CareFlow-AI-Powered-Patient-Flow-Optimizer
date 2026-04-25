@@ -82,12 +82,13 @@ const HOSPITAL_DEPARTMENTS = [
 const API = 'http://127.0.0.1:8002';
 
 // ✅ Module-level pure function — no hooks here
-const normaliseStatus = (raw: string | null | undefined): 'none' | 'requested' | 'approved' => {
+const normaliseStatus = (raw: string | null | undefined): 'none' | 'requested' | 'approved' | 'rejected' => {
   if (!raw) return 'none';
   const s = raw.toLowerCase();
   if (s === 'approved') return 'approved';
+  if (s === 'rejected') return 'rejected';
   if (s === 'none') return 'none';
-  return 'requested'; // covers: requested, pending, supervision required, etc.
+  return 'requested';
 };
 
 const fetchPatients = async (): Promise<Patient[]> => {
@@ -109,8 +110,8 @@ const fetchPatients = async (): Promise<Patient[]> => {
         id: c.id,
         type: c.title ?? 'Untitled Case',
         department: c.department ?? 'General',
-        glStatus: normaliseStatus(c.workflow_status),
-        claimStatus: 'none',
+        glStatus: normaliseStatus(Array.isArray(c.gl) ? c.gl[0]?.status : c.gl?.status),
+        claimStatus: normaliseStatus(Array.isArray(c.claims) ? c.claims[0]?.status : c.claims?.status),
         totalBill: typeof c.medical_bill_price === 'number' ? c.medical_bill_price : parseFloat(c.medical_bill_price || '0'),
         hasMedicalBill: c.has_medical_bill ?? false,
         billUrl: c.bill_url,
@@ -489,8 +490,6 @@ export default function Patients() {
                   {p.name}
                 </button>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', gap: '0.75rem' }}>
-                  <span>{p.age} years old</span>
-                  <span>•</span>
                   <span>{p.caseCount} case{p.caseCount !== 1 ? 's' : ''}</span>
                 </div>
               </div>
@@ -597,10 +596,6 @@ export default function Patients() {
                     </button>
                   </h2>
                   <div style={{ display: 'flex', gap: '2rem', opacity: 0.9 }}>
-                    <div>
-                      <div style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.8, textTransform: 'uppercase' }}>Patient Age</div>
-                      <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{selectedPatient.age} Years</div>
-                    </div>
                     <div>
                       <div style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.8, textTransform: 'uppercase' }}>Dr. In Charge</div>
                       <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{selectedPatient.doctorInCharge || 'Unassigned'}</div>

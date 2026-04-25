@@ -16,54 +16,91 @@ IN_ROOM_STATUSES = frozenset({"In Consult", "In Resus"})
 class CareFlowService:
     @staticmethod
     async def get_triage_overview(db: AsyncSession, hospital_id: uuid.UUID):
-        """Fetch all patients currently in triage for a specific hospital via optimized REST joins."""
-        # Query Sessions with Patient, Doctor and Department info joined in one call
+        """Fetch all patients currently in triage or scheduled for a specific hospital."""
+        # 1. Fetch active sessions (walk-ins / checked-in)
+        # Use aliases and explicit hints for sessions as they seem to have FKs
         sessions = await supabase_rest.query_table("sessions", {
             "hospital_id": f"eq.{hospital_id}",
             "status": "neq.signed",
-            "select": "*,patients(*),doctors(full_name),departments(name)",
+            "select": "*,patient_data:patients!patient_id(*),doctor_data:doctors!doctor_id(full_name),dept_data:departments!department_id(name)",
             "order": "created_at.desc"
         })
-        if not sessions:
-            sessions = []
+        if not sessions: sessions = []
+
+        # 2. Fetch upcoming appointments (scheduled)
+        # We'll fetch appointments first, then patients/doctors separately because of missing FKs
+        appointments = await supabase_rest.query_table("appointments", {
+            "hospital_id": f"eq.{hospital_id}",
+            "status": "eq.Upcoming",
+            "order": "scheduled_at.asc"
+        })
+        if not appointments: appointments = []
+
+        # JIT Status Update: Auto-expire appointments that are in the past
+        now = datetime.now(timezone.utc)
+        expired_ids = []
+        active_appointments = []
+        
+        for a in appointments:
+            sched_str = a.get("scheduled_at")
+            if sched_str:
+                try:
+                    # Use a small grace period (e.g. 15 mins) or just straight time
+                    sched_dt = datetime.fromisoformat(sched_str.replace("Z", "+00:00"))
+                    if sched_dt < now:
+                        expired_ids.append(str(a["id"]))
+                        continue
+                except: pass
+            active_appointments.append(a)
+
+        if expired_ids:
+            # Perform bulk update for expired appointments
+            await supabase_rest.update_table("appointments", {"status": "Past"}, {"id": f"in.({','.join(expired_ids)})"})
+            print(f"DEBUG: [get_triage_overview] Auto-expired {len(expired_ids)} appointments")
+        
+        appointments = active_appointments
+
+        # Fetch patients and doctors for these appointments
+        appt_patient_ids = list(set(str(a["patient_id"]) for a in appointments if a.get("patient_id")))
+        appt_doctor_ids = list(set(str(a["doctor_id"]) for a in appointments if a.get("doctor_id")))
+        
+        print(f"DEBUG: [get_triage_overview] Appt Patient IDs: {appt_patient_ids}")
+
+        patients_map = {}
+        if appt_patient_ids:
+            p_res = await supabase_rest.query_table("patients", {"id": f"in.({','.join(appt_patient_ids)})"})
+            print(f"DEBUG: [get_triage_overview] Patients fetched: {len(p_res or [])}")
+            for p in (p_res or []): patients_map[str(p["id"])] = p
+
+        doctors_map = {}
+        if appt_doctor_ids:
+            d_res = await supabase_rest.query_table("doctors", {"id": f"in.({','.join(appt_doctor_ids)})", "select": "id,full_name"})
+            for d in (d_res or []): doctors_map[str(d["id"])] = d
 
         patient_list = []
         critical_count = 0
+        active_session_ids = {str(s["id"]) for s in sessions}
 
+        # Process Sessions
         for s in sessions:
-            p_info = s.get("patients", {})
-            # Supabase join returns either a list or a dict depending on relationship type
+            p_info = s.get("patient_data", {})
             p = p_info[0] if isinstance(p_info, list) and p_info else p_info
-            if not p:
-                continue
+            if not p: continue
 
             level = 1 if s.get("urgency_level") == "P1" else 2 if s.get("urgency_level") == "P2" else 3
-            if level == 1:
-                critical_count += 1
+            if level == 1: critical_count += 1
 
-            doc_info = s.get("doctors")
-            if isinstance(doc_info, list) and doc_info:
-                doc_name = doc_info[0].get("full_name", "Unassigned")
-            elif isinstance(doc_info, dict):
-                doc_name = doc_info.get("full_name", "Unassigned")
-            else:
-                doc_name = "Unassigned"
-
-            dept_info = s.get("departments")
-            if isinstance(dept_info, list) and dept_info:
-                dept_name = dept_info[0].get("name", "Triage Queue")
-            elif isinstance(dept_info, dict):
-                dept_name = dept_info.get("name", "Triage Queue")
-            else:
-                dept_name = "Triage Queue"
+            doc_info = s.get("doctor_data")
+            doc_name = (doc_info[0] if isinstance(doc_info, list) and doc_info else doc_info or {}).get("full_name", "Unassigned")
+            
+            dept_info = s.get("dept_data")
+            dept_name = (dept_info[0] if isinstance(dept_info, list) and dept_info else dept_info or {}).get("name", "Triage Queue")
 
             created_at = s.get("created_at", "")
             time_str = "00:00"
             if created_at:
-                try:
-                    time_str = datetime.fromisoformat(created_at.replace("Z", "+00:00")).strftime("%H:%M")
-                except Exception:
-                    pass
+                try: time_str = datetime.fromisoformat(created_at.replace("Z", "+00:00")).strftime("%H:%M")
+                except: pass
 
             triage_res = s.get("triage_result", {}) or {}
             metadata = p.get("metadata_data", {}) or {}
@@ -71,7 +108,7 @@ class CareFlowService:
             patient_list.append({
                 "id": str(s["id"]),
                 "patient_id": str(p.get("id", "")),
-                "time": time_str,
+                "time": f"Arrived {time_str}",
                 "level": level,
                 "initials": "".join([n[0] for n in p.get("full_name", "??").split() if n]),
                 "name": p.get("full_name", "Unknown"),
@@ -80,29 +117,62 @@ class CareFlowService:
                 "diagnosis": triage_res.get("preliminary_diagnosis", "Pending"),
                 "department": dept_name,
                 "assigned_doctor": doc_name,
-                "ai_reasoning": triage_res.get("reasoning", "Awaiting AI analysis..."),
-                "status": s.get("status"),
-                "status_color": "danger" if level == 1 else "warning" if level == 2 else "neutral",
-                "metadata_data": metadata,
-                "email": p.get("email", ""),
-                "phone": p.get("phone", ""),
-                "ic_number": p.get("ic_number", "")
+                "status": s.get("status", "In Consult"),
+                "is_active": True,
+                "type": "walk-in"
             })
 
-        # Find active encounter (patient with "In Consult" status)
-        active = None
-        for p in patient_list:
-            if p.get("status") == "In Consult":
-                active = p
-                break
+        # Process Appointments
+        for a in appointments:
+            if a.get("session_id") and str(a["session_id"]) in active_session_ids:
+                continue
+            
+            p = patients_map.get(str(a.get("patient_id")))
+            if not p: continue
+
+            level_str = a.get("urgency_level") or "P3"
+            level = 1 if level_str == "P1" else 2 if level_str == "P2" else 3
+            
+            doc = doctors_map.get(str(a.get("doctor_id")), {})
+            doc_name = doc.get("full_name", "Unassigned")
+
+            scheduled_at = a.get("scheduled_at", "")
+            time_str = "Scheduled"
+            if scheduled_at:
+                try: time_str = datetime.fromisoformat(scheduled_at.replace("Z", "+00:00")).strftime("%H:%M")
+                except: pass
+
+            patient_list.append({
+                "id": str(a["id"]),
+                "patient_id": str(p.get("id", "")),
+                "time": f"Appt {time_str}",
+                "level": level,
+                "initials": "".join([n[0] for n in p.get("full_name", "??").split() if n]),
+                "name": p.get("full_name", "Unknown"),
+                "details": f"{p.get('phone', '')} • MRN: {str(p.get('id', ''))[:4].upper()}",
+                "complaint": a.get("chief_complaint") or "Scheduled Appointment",
+                "diagnosis": "Scheduled",
+                "department": "Scheduled",
+                "assigned_doctor": doc_name,
+                "status": "Awaiting Arrival",
+                "is_active": False,
+                "type": "appointment"
+            })
+
+        # Final sorting: Urgency first (P1 top), then Arrival/Appt time
+        patient_list.sort(key=lambda x: (x["level"], x["time"]))
+
+        # Find active encounter
+        active = next((p for p in patient_list if p.get("is_active")), None)
 
         return {
             "critical": critical_count,
-            "queue_active": len(patient_list),
+            "queue_active": len([p for p in patient_list if p.get("is_active")]),
             "avg_wait": "15m",
             "patients": patient_list,
             "active_encounter": active
         }
+
 
     @staticmethod
     async def build_capacity_board(db: AsyncSession, hospital_id: uuid.UUID):
@@ -267,7 +337,7 @@ class CareFlowService:
             if "status" in data: update_data["status"] = data["status"]
 
             if update_data:
-                result = await supabase_rest.update_table("sessions", str(session_id), update_data)
+                result = await supabase_rest.update_table("sessions", update_data, str(session_id))
                 return result is not None
             return False
         except Exception as e:
@@ -425,7 +495,7 @@ class CareFlowService:
             if chosen_doctor and chosen_doctor.get("id") is not None:
                 update_data["doctor_id"] = chosen_doctor["id"]
 
-            result = await supabase_rest.update_table("sessions", str(session_id), update_data)
+            result = await supabase_rest.update_table("sessions", update_data, str(session_id))
             if not result:
                 print(f"ERROR: [auto_assign_patient] supabase update failed for session {session_id} with data {update_data}")
                 return None
@@ -506,9 +576,9 @@ class CareFlowService:
             
             # Assign to room if provided
             if room_id and doc.get("id"):
-                await supabase_rest.update_table("rooms", str(room_id), {
+                await supabase_rest.update_table("rooms", {
                     "doctor_id": doc["id"]
-                })
+                }, str(room_id))
             
             return doc
         except Exception as e:
@@ -519,9 +589,9 @@ class CareFlowService:
     async def assign_doctor_to_room(db: AsyncSession, room_id: uuid.UUID, doctor_id: Optional[uuid.UUID]):
         """Assign or unassign a doctor from a room via REST API."""
         try:
-            result = await supabase_rest.update_table("rooms", str(room_id), {
+            result = await supabase_rest.update_table("rooms", {
                 "doctor_id": str(doctor_id) if doctor_id else None
-            })
+            }, str(room_id))
             return result is not None
         except Exception as e:
             print(f"ERROR in assign_doctor_to_room: {e}")
@@ -615,7 +685,7 @@ class CareFlowService:
                 "triage_result": merged_triage,
             }
 
-            result = await supabase_rest.update_table("sessions", str(session_id), update_data)
+            result = await supabase_rest.update_table("sessions", update_data, str(session_id))
             return result is not None
         except Exception as e:
             print(f"ERROR in sign_note: {e}")
@@ -804,12 +874,12 @@ class CareFlowService:
                 # OPTIONAL: update latest info
                 await supabase_rest.update_table(
                     "patients",
-                    patient_id,
                     {
                         "full_name": name,
                         "phone": phone,
                         "email": email
-                    }
+                    },
+                    patient_id
                 )
 
             else:
@@ -851,11 +921,11 @@ class CareFlowService:
 
             if existing_session:
                 print("⚠️ Patient already in queue")
-
-                return type('Patient', (), {
-                    'id': patient_id,
-                    'full_name': name
-                })()
+                return {
+                    "status": "exists",
+                    "patient_id": patient_id,
+                    "name": name
+                }
 
             # ============================================
             # STEP 3: Create NEW session
@@ -889,10 +959,11 @@ class CareFlowService:
             # ============================================
             # STEP 4: Return
             # ============================================
-            return type('Patient', (), {
-                'id': patient_id,
-                'full_name': name
-            })()
+            return {
+                "status": "success",
+                "patient_id": patient_id,
+                "name": name
+            }
 
         except Exception as e:
             print(f"ERROR in register_patient: {e}")
@@ -997,7 +1068,7 @@ class CareFlowService:
             
             # Update via REST API using PATCH
             update_data = {"metadata_data": metadata}
-            result = await supabase_rest.update_table("patients", patient_id, update_data)
+            result = await supabase_rest.update_table("patients", update_data, patient_id)
             return result is not None
         except Exception as e:
             print(f"ERROR in update_patient_vitals: {e}")

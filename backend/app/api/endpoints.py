@@ -1466,7 +1466,7 @@ async def register_patient(req: RegisterPatientRequest, user_id: str = Depends(v
             raise HTTPException(403, "No hospital assigned to profile")
         
         async with AsyncSessionLocal() as db:
-            patient = await CareFlowService.register_patient(
+            result = await CareFlowService.register_patient(
                 db, h_id,
                 name=req.name,
                 ic_number=req.ic_number,
@@ -1475,11 +1475,7 @@ async def register_patient(req: RegisterPatientRequest, user_id: str = Depends(v
                 complaint=req.complaint,
                 level=req.level
             )
-            return {
-                "status": "success",
-                "patient_id": str(patient.id),
-                "name": patient.full_name
-            }
+            return result
     except Exception as e:
         print(f"ERROR: [register_patient] {type(e).__name__}: {e}")
         import traceback
@@ -1753,7 +1749,7 @@ async def get_active_patients():
         response = await supabase_rest.query_table(
             "patients",
             {
-                "select": "id, full_name, age, category, status, insurers, doctor_in_charge, policy_url, medical_cases(id, title, department, status, workflow_status, has_medical_bill, medical_bill_price, doctor_diagnosis, diagnosis_pdf_url, generated_doc_url, claim_type, created_at, medical_bills(file_url, total_bill, case_id))",
+                "select": "id, full_name, age, category, status, insurers, doctor_in_charge, policy_url, medical_cases!patient_id(id, title, department, status, workflow_status, has_medical_bill, medical_bill_price, doctor_diagnosis, diagnosis_pdf_url, generated_doc_url, claim_type, created_at, gl_data:gl!gl_id(status), claim_data:claims!claims_id(status), medical_bills!case_id(file_url, total_bill, case_id))",
                 "status": "eq.active",
                 "order": "created_at.desc"
             }
@@ -1785,16 +1781,18 @@ async def get_active_patients():
                         "title": c.get("title"),
                         "department": c.get("department"),
                         "status": c.get("status"),
-                          "workflow_status": c.get("workflow_status"),
-                          "has_medical_bill": c.get("has_medical_bill"),
-                          "medical_bill_price": c.get("medical_bill_price"),
-                          "doctor_diagnosis": c.get("doctor_diagnosis"),
-                          "diagnosis_pdf_url": c.get("diagnosis_pdf_url"),
-                          "generated_doc_url": c.get("generated_doc_url"),
-                          "claim_type": c.get("claim_type"),
-                          "bill_url": next((b.get("file_url") for b in c.get("medical_bills", []) if b.get("case_id") == c.get("id")), 
-                                          c.get("medical_bills", [{}])[0].get("file_url") if c.get("medical_bills") else None),
-                          "created_at": c.get("created_at")
+                        "workflow_status": c.get("workflow_status"),
+                        "has_medical_bill": c.get("has_medical_bill"),
+                        "medical_bill_price": c.get("medical_bill_price"),
+                        "doctor_diagnosis": c.get("doctor_diagnosis"),
+                        "diagnosis_pdf_url": c.get("diagnosis_pdf_url"),
+                        "generated_doc_url": c.get("generated_doc_url"),
+                        "claim_type": c.get("claim_type"),
+                        "gl": c.get("gl_data"),
+                        "claims": c.get("claim_data"),
+                        "bill_url": next((b.get("file_url") for b in c.get("medical_bills", []) if b.get("case_id") == c.get("id")), 
+                                        c.get("medical_bills", [{}])[0].get("file_url") if c.get("medical_bills") else None),
+                        "created_at": c.get("created_at")
                     } 
                     for c in (p.get("medical_cases") or [])
                 ]
@@ -2863,6 +2861,11 @@ async def get_my_cases(user=Depends(verify_clerk_token)):
         diagnoses = [c["title"] for c in p.get("medical_cases", [])]
 
         return {
+            "id": p.get("id"),
+            "full_name": p.get("full_name"),
+            "age": p.get("age"),
+            "diagnoses": diagnoses,
+            "insurers": p.get("insurers"),
             "cases": [
                 {
                     "id": c.get("id"),
@@ -2878,10 +2881,6 @@ async def get_my_cases(user=Depends(verify_clerk_token)):
                 }
                 for c in p.get("medical_cases", [])
             ],
-            "age": p.get("age"),
-            "diagnoses": diagnoses,
-            "insurers": p.get("insurers"),
-
         }
 
     except Exception as e:
@@ -3101,57 +3100,85 @@ async def update_status(case_id: str, type: str, status: str):
                 {"status": status},
                 {"id": f"eq.{gl_id}"}
             )
-
         else:
-            create = await supabase_rest.update_table(
+            create = await supabase_rest.insert_table(
                 "gl",
                 {
                     "case_id": case_id,
                     "status": status
-                },
-                None,
-                method="POST"
+                }
             )
-
-            new_gl_id = create[0]["id"]
-
+            if create and len(create) > 0:
+                new_gl_id = create[0]["id"]
+                await supabase_rest.update_table(
+                    "medical_cases",
+                    {"gl_id": new_gl_id},
+                    {"id": f"eq.{case_id}"}
+                )
+    elif type == "claim":
+        if claims_id:
             await supabase_rest.update_table(
-                "medical_cases",
-                {"gl_id": new_gl_id},
-                {"id": f"eq.{case_id}"}
+                "claims",
+                {"status": status},
+                {"id": f"eq.{claims_id}"}
             )
+        else:
+            create = await supabase_rest.insert_table(
+                "claims",
+                {
+                    "case_id": case_id,
+                    "status": status
+                }
+            )
+            if create and len(create) > 0:
+                new_claims_id = create[0]["id"]
+                await supabase_rest.update_table(
+                    "medical_cases",
+                    {"claims_id": new_claims_id},
+                    {"id": f"eq.{case_id}"}
+                )
+    
+    return {"success": True, "status": status}
 
 @router.delete("/cases/{case_id}/status")
-async def withdraw_gl(case_id: str, patient_id: str = Depends(get_current_patient_id)):
-    # 1. get GL id
+async def withdraw_status(case_id: str, type: str, patient_id: str = Depends(get_current_patient_id)):
+    if type not in ["gl", "claim"]:
+        raise HTTPException(400, "Invalid type")
+
+    # 1. get ID
     res = await supabase_rest.query_table(
         "medical_cases",
         {
-            "select": "gl_id",
+            "select": "gl_id, claims_id",
             "id": f"eq.{case_id}",
             "patient_id": f"eq.{patient_id}"
         }
     )
 
-    if not res or not res[0].get("gl_id"):
-        return {"message": "No GL record to withdraw"}
+    if not res:
+        raise HTTPException(404, "Case not found")
 
-    gl_id = res[0]["gl_id"]
+    case = res[0]
+    target_id = case.get("gl_id") if type == "gl" else case.get("claims_id")
+
+    if not target_id:
+        return {"message": f"No {type.upper()} record to withdraw"}
 
     # 2. unlink from medical_cases
+    field = "gl_id" if type == "gl" else "claims_id"
     await supabase_rest.update_table(
         "medical_cases",
-        {"gl_id": None},
+        {field: None},
         {"id": f"eq.{case_id}"}
     )
 
-    # 3. delete GL row
+    # 3. delete record
     await supabase_rest.delete_table(
-        "gl",
-        {"id": f"eq.{gl_id}"}
+        "gl" if type == "gl" else "claims",
+        {"id": f"eq.{target_id}"}
     )
 
-    return {"status": "none", "message": "GL record withdrawn successfully"}
+    return {"status": "none", "message": f"{type.upper()} record withdrawn successfully"}
 
 # ---------------------------------------------------------------------------
 # GET /me/role  — returns the current user's role from profiles table

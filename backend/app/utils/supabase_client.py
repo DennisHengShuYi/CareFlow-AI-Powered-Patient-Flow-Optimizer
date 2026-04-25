@@ -39,28 +39,41 @@ class SupabaseRESTClient:
                 return None
             return response.json()
 
-    async def update_table(self, table: str, data: dict, filters: dict):
-        """Update data in a Supabase table via REST."""
+    async def update_table(self, table: str, data: dict, filters: dict | str):
+        """Update data in a Supabase table via REST. 
+        filters can be a dict of query params or a string (assumed to be an ID).
+        """
         if not self.url or not self.key:
             return None
             
         async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
             endpoint = f"{self.url}/rest/v1/{table}"
-            # Filters are passed as query params (e.g. ?id=eq.XXX)
-            response = await client.patch(endpoint, headers=self.headers, json=data, params=filters)
+            params = filters if isinstance(filters, dict) else {"id": f"eq.{filters}"}
+            
+            response = await client.patch(endpoint, headers=self.headers, json=data, params=params)
             if response.status_code not in [200, 201, 204]:
                 print(f"DEBUG: Supabase REST error {response.status_code}: {response.text}")
                 return None
-            return response.json() if response.status_code != 204 else True
+            
+            if response.status_code == 204 or not response.content:
+                return True
+            try:
+                return response.json()
+            except Exception:
+                return True
 
-    async def delete_table(self, table: str, filters: dict):
-        """Delete data from a Supabase table via REST."""
+    async def delete_table(self, table: str, filters: dict | str):
+        """Delete data from a Supabase table via REST.
+        filters can be a dict of query params or a string (assumed to be an ID).
+        """
         if not self.url or not self.key:
             return None
             
         async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
             endpoint = f"{self.url}/rest/v1/{table}"
-            response = await client.delete(endpoint, headers=self.headers, params=filters)
+            params = filters if isinstance(filters, dict) else {"id": f"eq.{filters}"}
+            
+            response = await client.delete(endpoint, headers=self.headers, params=params)
             if response.status_code not in [200, 201, 204]:
                 print(f"DEBUG: Supabase REST error {response.status_code}: {response.text}")
                 return None
@@ -83,34 +96,6 @@ class SupabaseRESTClient:
                 print(f"DEBUG: Supabase Storage error {response.status_code}: {response.text}")
                 return None
             return response.json()
-
-    async def update_table(self, table: str, id: str, data: dict):
-        """Update a single record in a Supabase table via REST."""
-        if not self.url or not self.key:
-            return None
-
-        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
-            endpoint = f"{self.url}/rest/v1/{table}?id=eq.{id}"
-            response = await client.patch(endpoint, headers=self.headers, json=data)
-            if response.status_code not in [200, 201, 204]:
-                print(f"DEBUG: Supabase REST error {response.status_code}: {response.text}")
-                return None
-            if response.status_code == 204 or not response.content:
-                return {}
-            return response.json()
-
-    async def delete_table(self, table: str, id: str):
-        """Delete a single record from a Supabase table via REST."""
-        if not self.url or not self.key:
-            return None
-
-        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
-            endpoint = f"{self.url}/rest/v1/{table}?id=eq.{id}"
-            response = await client.delete(endpoint, headers=self.headers)
-            if response.status_code not in [200, 201, 204]:
-                print(f"DEBUG: Supabase REST error {response.status_code}: {response.text}")
-                return None
-            return True
 
     async def get_profile(self, user_id: str):
         """Fetch a single profile by ID."""
@@ -140,7 +125,7 @@ class SupabaseRESTClient:
 
     async def upsert_table(self, table: str, data: dict, id: str = None):
         if id:
-            result = await self.update_table(table, id, data)
+            result = await self.update_table(table, data, id)
             if result is not None:
                 return result
         return await self.insert_table(table, data)

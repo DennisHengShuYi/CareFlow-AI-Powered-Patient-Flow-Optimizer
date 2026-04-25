@@ -700,7 +700,7 @@ export default function Appointments() {
                 className="btn-primary"
                 onClick={() => {
                   setConfirmation(null);
-                  navigate('/my-bookings');
+                  navigate('/my-appointments');
                 }}
               >
                 View My Bookings

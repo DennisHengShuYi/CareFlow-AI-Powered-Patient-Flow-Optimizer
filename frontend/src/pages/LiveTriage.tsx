@@ -1504,16 +1504,8 @@ export default function LiveTriage() {
                               onClick={() => handleSelectPatient(patient.id)}
                               style={{
                                 background: isCritical ? "#fffcfc" : "white",
-                                border: isActiveEncounter
-                                  ? "2px solid var(--primary)"
-                                  : isCritical
-                                    ? "2px solid #ba1a1a"
-                                    : "1px solid var(--neutral-400)",
-                                borderLeft: isActiveEncounter
-                                  ? "6px solid var(--primary)"
-                                  : isCritical
-                                    ? "6px solid #ba1a1a"
-                                    : "1px solid var(--neutral-400)",
+                                border: "1px solid var(--neutral-400)",
+                                borderLeft: "1px solid var(--neutral-400)",
                                 borderRadius: "12px",
                                 padding: "1rem",
                                 display: "grid",
@@ -1585,7 +1577,7 @@ export default function LiveTriage() {
                                     marginTop: "0.25rem",
                                   }}
                                 >
-                                  Arrived {patient.time}
+                                  {patient.time}
                                 </div>
                               </div>
                               <div

@@ -14,12 +14,11 @@ headers = {
 
 async def check():
     async with httpx.AsyncClient(verify=False) as client:
-        res = await client.get(f"{URL}/rest/v1/", headers=headers)
+        # Check all distinct statuses
+        res = await client.get(f"{URL}/rest/v1/appointments?select=status", headers=headers)
         if res.status_code == 200:
-            data = res.json()
-            # The keys of 'definitions' in Swagger JSON are the table names
-            tables = data.get('definitions', {}).keys()
-            print("Tables:", list(tables))
+            statuses = set(a['status'] for a in res.json())
+            print("Available statuses in table:", statuses)
         else:
             print(f"Error ({res.status_code}):", res.text)
 

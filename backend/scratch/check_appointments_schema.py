@@ -14,12 +14,14 @@ headers = {
 
 async def check():
     async with httpx.AsyncClient(verify=False) as client:
-        res = await client.get(f"{URL}/rest/v1/", headers=headers)
+        # Check appointments columns
+        res = await client.get(f"{URL}/rest/v1/appointments?limit=1", headers=headers)
         if res.status_code == 200:
             data = res.json()
-            # The keys of 'definitions' in Swagger JSON are the table names
-            tables = data.get('definitions', {}).keys()
-            print("Tables:", list(tables))
+            if data:
+                print("Appointments columns:", data[0].keys())
+            else:
+                print("Appointments table is empty.")
         else:
             print(f"Error ({res.status_code}):", res.text)
 

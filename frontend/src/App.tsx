@@ -6,6 +6,7 @@ import Claims from './pages/Claims';
 import Intake from './pages/Intake';
 import Departments from './pages/Departments';
 import Appointments from './pages/Appointments';
+import MyAppointments from './pages/MyAppointments';
 import MyCases from './pages/MyCases';
 import NearbyFacilities from './pages/NearbyFacilities';
 import Patients from './pages/Patients';
@@ -160,6 +161,7 @@ function App() {
         <Route path="/departments" element={<ProtectedRoute allowedRoles={['hospital_staff']}><Departments /></ProtectedRoute>} />
         <Route path="/nearby-facilities" element={<ProtectedRoute allowedRoles={['patient']}><NearbyFacilities /></ProtectedRoute>} />
         <Route path="/appointments" element={<ProtectedRoute allowedRoles={['patient']}><Appointments /></ProtectedRoute>} />
+        <Route path="/my-appointments" element={<ProtectedRoute allowedRoles={['patient']}><MyAppointments /></ProtectedRoute>} />
         <Route path="/my-cases" element={<ProtectedRoute allowedRoles={['patient']}><MyCases /></ProtectedRoute>} />
 
         {/* Fallback */}

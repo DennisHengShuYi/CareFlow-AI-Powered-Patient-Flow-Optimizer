@@ -65,6 +65,12 @@ export default function MyCases() {
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const [appointments, setAppointments] = useState<Record<string, Appointment[]>>({});
   const [loadingApts, setLoadingApts] = useState(false);
+  const [filter, setFilter] = useState<'active' | 'all'>('active');
+
+  const filteredCases = (profile?.cases ?? []).filter(c => {
+    if (filter === 'all') return true;
+    return (c.workflow_status || '').toLowerCase() === 'none';
+  });
 
   const loadProfile = async () => {
     setLoading(true);
@@ -200,10 +206,6 @@ export default function MyCases() {
               </h2>
               <div style={{ display: 'flex', gap: '2rem', opacity: 0.9 }}>
                 <div>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.8, textTransform: 'uppercase' }}>Age</div>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{profile.age} Years</div>
-                </div>
-                <div>
                   <div style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.8, textTransform: 'uppercase' }}>Total Cases</div>
                   <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{profile.cases.length}</div>
                 </div>
@@ -327,15 +329,41 @@ export default function MyCases() {
 
               {/* Right: cases list */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-                <h3 style={{ fontSize: '1.25rem', fontWeight: 800 }}>Medical Cases</h3>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <h3 style={{ fontSize: '1.25rem', fontWeight: 800 }}>Medical Cases</h3>
+                  <div style={{ display: 'flex', gap: '0.5rem', background: 'var(--neutral-200)', padding: '0.25rem', borderRadius: '12px' }}>
+                    <button 
+                      onClick={() => setFilter('active')}
+                      style={{ 
+                        padding: '0.5rem 1rem', borderRadius: '10px', fontSize: '0.85rem', fontWeight: 700,
+                        backgroundColor: filter === 'active' ? 'white' : 'transparent',
+                        color: filter === 'active' ? 'var(--primary)' : 'var(--text-muted)',
+                        border: 'none', cursor: 'pointer', boxShadow: filter === 'active' ? '0 2px 4px rgba(0,0,0,0.05)' : 'none'
+                      }}
+                    >
+                      Active
+                    </button>
+                    <button 
+                      onClick={() => setFilter('all')}
+                      style={{ 
+                        padding: '0.5rem 1rem', borderRadius: '10px', fontSize: '0.85rem', fontWeight: 700,
+                        backgroundColor: filter === 'all' ? 'white' : 'transparent',
+                        color: filter === 'all' ? 'var(--primary)' : 'var(--text-muted)',
+                        border: 'none', cursor: 'pointer', boxShadow: filter === 'all' ? '0 2px 4px rgba(0,0,0,0.05)' : 'none'
+                      }}
+                    >
+                      All
+                    </button>
+                  </div>
+                </div>
 
-                {profile.cases.length === 0 && (
+                {filteredCases.length === 0 && (
                   <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-                    No cases found.
+                    {filter === 'active' ? 'No active cases found. All cases have been processed for insurance or are completed.' : 'No cases found.'}
                   </div>
                 )}
 
-                {profile.cases.map((c, i) => {
+                {filteredCases.map((c, i) => {
                   const gl = Array.isArray(c.gl) ? c.gl[0] : c.gl;
                   const claim = Array.isArray(c.claim) ? c.claim[0] : c.claim;
 

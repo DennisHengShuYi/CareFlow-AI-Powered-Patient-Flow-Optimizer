@@ -323,7 +323,7 @@ export const CaseCard: React.FC<CaseCardProps> = ({ caseData, onClick, showActio
         display: 'grid',
         gridTemplateColumns: '2fr 1fr 1fr 1fr',
         gap: '1.5rem',
-        alignItems: 'center',
+        alignItems: 'start',
       }}>
         <div style={{ cursor: 'pointer' }} onClick={onClick}>
           <div style={{
