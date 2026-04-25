@@ -20,6 +20,19 @@ import os
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, Form
 from fastapi.responses import JSONResponse
 import httpx
+import pdfplumber
+import pytesseract
+import io
+import urllib.parse
+from io import BytesIO
+from PIL import Image
+from pypdf import PdfReader, PdfWriter
+from pytesseract import Output
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter, A4, LETTER
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+
 from pydantic import BaseModel
 from sqlalchemy import text, select, and_, func
 
@@ -1594,9 +1607,6 @@ async def orchestrate_insurance_claim(case_id: str, body: dict):
         
         # 2. Extract Text from Source Docs (Diagnosis, Policy, Bill)
         source_text = []
-        import httpx
-        import pdfplumber
-        from io import BytesIO
 
         async def fetch_and_extract(url, label, target_list):
             if not url: return
@@ -1745,22 +1755,8 @@ Output format (JSON):
         })
 
         # 6. PDF Generation (ReportLab + PyPDF Stamping)
-        from reportlab.lib.pagesizes import LETTER, A4
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-        from reportlab.lib.styles import getSampleStyleSheet
-        from reportlab.pdfgen import canvas
-        import time
-        import urllib.parse
         
         async def generate_filled_pdf(template_bytes, ai_data):
-            from pypdf import PdfReader, PdfWriter
-            import pdfplumber
-            import pytesseract
-            from pytesseract import Output
-            from reportlab.pdfgen import canvas
-            from reportlab.lib.pagesizes import A4
-            import io
-
             # 1. Image Conversion & OCR Anchor Extraction
             found_anchors = []
             try:
