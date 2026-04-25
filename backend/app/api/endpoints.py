@@ -191,8 +191,42 @@ class SetEncounterRequest(BaseModel):
     patient_id: str
 
 
+class RegisterPatientRequest(BaseModel):
+    name: str
+    ic_number: str
+    phone: str
+    email: str | None = None
+    complaint: str
+    level: int
+
+
+class UpdateVitalsRequest(BaseModel):
+    blood_pressure: str | None = None
+    heart_rate: str | None = None
+    oxygen_saturation: str | None = None
+
+
+class ExtendedOverrideRequest(BaseModel):
+    level: int | None = None
+    diagnosis: str | None = None
+    department_id: str | None = None
+    doctor_id: str | None = None
+    status: str | None = None
+    blood_pressure: str | None = None
+    heart_rate: str | None = None
+    oxygen_saturation: str | None = None
+
+
 class SignNoteRequest(BaseModel):
-    assessment_plan: str
+    assessment_plan: str | None = None
+    subjective: str | None = None
+    objective_note: str | None = None
+    assessment: str | None = None
+    plan: str | None = None
+
+
+class GenerateSoapRequest(BaseModel):
+    objective_note: str | None = ""
 
 
 class OverridePatientRequest(BaseModel):
@@ -206,6 +240,7 @@ class AddDoctorRequest(BaseModel):
     department_id: str
     name: str
     room_id: str | None = None  # optional: assign doctor to a room on creation
+    specialty: str | None = None
 
 class AddRoomRequest(BaseModel):
     department_id: str
@@ -576,10 +611,8 @@ async def get_session(
         return {
             "id": str(sess.id),
             "urgency_level": sess.urgency_level,
-            "confidence_score": sess.confidence_score,
             "status": sess.status,
             "triage_result": sess.triage_result,
-            "language_detected": sess.language_detected,
         }
 
 
@@ -1122,42 +1155,207 @@ async def simulate_patient(req: SimulatePatientRequest, user_id: str = Depends(v
         sess = await CareFlowService.simulate_patient(db, h_id, req.name, req.complaint, req.level)
         return {"status": "success", "session_id": str(sess.id)}
 
-@router.post("/api/triage/override/{session_id}")
-async def override_patient(session_id: str, req: OverridePatientRequest, user_id: str = Depends(verify_clerk_token)):
-    async with AsyncSessionLocal() as db:
-        success = await CareFlowService.override_patient(db, uuid.UUID(session_id), req.dict(exclude_none=True))
-        return {"success": success}
+@router.post("/api/triage/override/{patient_id}")
+async def override_patient(patient_id: str, req: OverridePatientRequest, user_id: str = Depends(verify_clerk_token)):
+    try:
+        print(f"DEBUG: [override_patient] patient_id={patient_id}, req={req.dict()}")
+        async with AsyncSessionLocal() as db:
+            success = await CareFlowService.override_patient(db, uuid.UUID(patient_id), req.dict(exclude_none=True))
+            print(f"DEBUG: [override_patient] success={success}")
+            return {"success": success}
+    except ValueError as e:
+        print(f"ERROR: [override_patient] Invalid UUID: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid patient ID format: {e}")
+    except Exception as e:
+        print(f"ERROR: [override_patient] {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to override patient: {str(e)}")
+
+@router.post("/api/triage/auto_assign/{patient_id}")
+async def auto_assign_patient(patient_id: str, user_id: str = Depends(verify_clerk_token)):
+    try:
+        uid = user_id.get("sub")
+        hospital_id = await _get_hospital_id(uid)
+        if not hospital_id:
+            raise HTTPException(403, "No hospital assigned")
+
+        async with AsyncSessionLocal() as db:
+            assignment = await CareFlowService.auto_assign_patient(db, uuid.UUID(patient_id), hospital_id)
+            if not assignment:
+                raise HTTPException(500, "Auto-assignment failed")
+            return {"success": True, "assignment": assignment}
+    except ValueError as e:
+        print(f"ERROR: [auto_assign_patient] Invalid UUID: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid patient ID format: {e}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"ERROR: [auto_assign_patient] {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to auto-assign patient: {str(e)}")
 
 @router.post("/api/admin/departments")
 async def add_department(req: NewDepartmentBody, user_id: str = Depends(verify_clerk_token)):
     h_id = await _get_hospital_id(user_id.get("sub"))
-    if not h_id: raise HTTPException(403, "No hospital assigned to profile")
+    if not h_id: 
+        raise HTTPException(403, "No hospital assigned to profile")
+    
     async with AsyncSessionLocal() as db:
         dept = await CareFlowService.add_department(db, h_id, req.name)
-        return {"id": str(dept.id), "name": dept.name}
+        
+        # 1. Extract from list if necessary
+        new_dept = dept[0] if isinstance(dept, list) else dept
+        
+        # 2. Handle both Object (dot notation) and Dictionary (bracket notation)
+        if isinstance(new_dept, dict):
+            return {
+                "id": str(new_dept.get("id")), 
+                "name": new_dept.get("name")
+            }
+        
+        # Fallback for class objects
+        return {
+            "id": str(new_dept.id), 
+            "name": new_dept.name
+        }
+
+# @router.post("/api/admin/doctors")
+# async def add_doctor(req: AddDoctorRequest, user_id: str = Depends(verify_clerk_token)):
+#     h_id = await _get_hospital_id(user_id.get("sub"))
+#     if not h_id: raise HTTPException(403)
+#     room_id = uuid.UUID(req.room_id) if req.room_id else None
+#     async with AsyncSessionLocal() as db:
+#         doc = await CareFlowService.add_doctor(db, h_id, uuid.UUID(req.department_id), req.name, room_id)
+#         return {"id": str(doc.id), "name": doc.full_name}
 
 @router.post("/api/admin/doctors")
-async def add_doctor(req: AddDoctorRequest, user_id: str = Depends(verify_clerk_token)):
+async def add_doctor(req: AddDoctorRequest, user_id: dict = Depends(verify_clerk_token)):
     h_id = await _get_hospital_id(user_id.get("sub"))
-    if not h_id: raise HTTPException(403)
-    room_id = uuid.UUID(req.room_id) if req.room_id else None
-    async with AsyncSessionLocal() as db:
-        doc = await CareFlowService.add_doctor(db, h_id, uuid.UUID(req.department_id), req.name, room_id)
-        return {"id": str(doc.id), "name": doc.full_name}
+    if not h_id:
+        raise HTTPException(status_code=403, detail="Unauthorized: Hospital context missing")
+    
+    try:
+        dept_uuid = uuid.UUID(req.department_id)
+        room_uuid = uuid.UUID(req.room_id) if req.room_id else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID format provided")
 
-@router.patch("/api/admin/rooms/{room_id}/assign")
-async def assign_room(room_id: str, req: AssignRoomBody, user_id: str = Depends(verify_clerk_token)):
-    """Assign or unassign a doctor from a room."""
     async with AsyncSessionLocal() as db:
-        doctor_id = uuid.UUID(req.doctor_id) if req.doctor_id else None
-        success = await CareFlowService.assign_doctor_to_room(db, uuid.UUID(room_id), doctor_id)
-        return {"success": success}
+        try:
+            # Pass req.specialty into the service call
+            doc = await CareFlowService.add_doctor(
+                db, 
+                h_id, 
+                dept_uuid, 
+                req.name, 
+                room_uuid,
+                specialty=req.specialty
+            )
+            
+            if not doc:
+                raise Exception("Failed to create doctor record")
+
+            # doc is now confirmed to be a single DICT thanks to the service layer update
+            return {
+                "id": str(doc.get('id', '')), 
+                "name": doc.get('full_name', req.name),
+                "specialty": doc.get('specialty', req.specialty)
+            }
+        except Exception as e:
+            # General error handler for database/logic issues
+            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+# @router.patch("/api/admin/rooms/{room_id}/assign")
+# async def assign_room(room_id: str, req: AssignRoomBody, user_id: str = Depends(verify_clerk_token)):
+#     """Assign or unassign a doctor from a room."""
+#     async with AsyncSessionLocal() as db:
+#         doctor_id = uuid.UUID(req.doctor_id) if req.doctor_id else None
+#         success = await CareFlowService.assign_doctor_to_room(db, uuid.UUID(room_id), doctor_id)
+#         return {"success": success}
+@router.patch("/api/admin/rooms/{room_id}/assign")
+async def assign_doctor_to_room_api(
+    room_id: str,
+    req: AssignRoomBody,
+    user_id: str = Depends(verify_clerk_token)
+):
+    try:
+        target_room_id = str(room_id)
+        target_doctor_id = str(req.doctor_id) if req.doctor_id else None
+
+        print("Assign request:", target_room_id, target_doctor_id)
+
+        # ============================================
+        # STEP 1: Remove doctor from ANY existing room
+        # ============================================
+        if target_doctor_id:
+            current_rooms = await supabase_rest.query_table(
+                "rooms",
+                {"doctor_id": f"eq.{target_doctor_id}"}   
+            ) or []
+
+            print("Rooms currently assigned:", current_rooms)
+
+            for r in current_rooms:
+                await supabase_rest.update_table(
+                    "rooms",
+                    r["id"],                    
+                    {"doctor_id": None}
+                )
+
+        # ============================================
+        # STEP 2: Assign doctor to new room
+        # ============================================
+        if target_room_id:
+            await supabase_rest.update_table(
+                "rooms",
+                target_room_id,               # ✅ FIX: pass STRING id
+                {"doctor_id": target_doctor_id}
+            )
+
+        # ============================================
+        # STEP 3: DEBUG VERIFY
+        # ============================================
+        updated = await supabase_rest.query_table(
+            "rooms",
+            {"id": f"eq.{target_room_id}"}   # ✅ keep eq. for query
+        )
+
+        print("AFTER UPDATE:", updated)
+
+        return {"success": True}
+
+    except Exception as e:
+        print(f"ERROR: {e}")
+        return {"success": False, "detail": str(e)}
+
+# @router.post("/api/admin/rooms")
+# async def add_room(req: AddRoomRequest, user_id: str = Depends(verify_clerk_token)):
+#     async with AsyncSessionLocal() as db:
+#         room = await CareFlowService.add_room(db, uuid.UUID(req.department_id), req.label)
+#         return {"id": str(room.id), "label": room.label}
 
 @router.post("/api/admin/rooms")
 async def add_room(req: AddRoomRequest, user_id: str = Depends(verify_clerk_token)):
     async with AsyncSessionLocal() as db:
+        # We assume req.department_id is passed from your AddRoomRequest schema
         room = await CareFlowService.add_room(db, uuid.UUID(req.department_id), req.label)
-        return {"id": str(room.id), "label": room.label}
+        
+        # 1. Extract from list if necessary (Fixes: AttributeError: 'list' object has no attribute 'id')
+        new_room = room[0] if isinstance(room, list) else room
+        
+        # 2. Handle both Object (dot notation) and Dictionary (bracket notation)
+        if isinstance(new_room, dict):
+            return {
+                "id": str(new_room.get("id")), 
+                "label": new_room.get("label")
+            }
+        
+        return {
+            "id": str(new_room.id), 
+            "label": new_room.label
+        }
 
 @router.post("/api/triage/active_encounter")
 async def set_active_encounter(req: SetEncounterRequest, user_id: str = Depends(verify_clerk_token)):
@@ -1174,11 +1372,293 @@ async def sign_note(req: SignNoteRequest, user_id: str = Depends(verify_clerk_to
     # We'll need a way for the frontend to specify WHICH patient to sign
     pass # Wait, let's refine this to match the override logic
 
+@router.post("/api/triage/generate_soap/{session_id}")
+async def generate_soap_note(session_id: str, req: GenerateSoapRequest, user_id: str = Depends(verify_clerk_token)):
+    try:
+        async with AsyncSessionLocal() as db:
+            note = await CareFlowService.generate_soap_note(db, uuid.UUID(session_id), req.objective_note or "")
+            if not note:
+                raise HTTPException(status_code=404, detail="Session not found or unable to generate SOAP")
+            return note
+    except ValueError as e:
+        print(f"ERROR: [generate_soap_note] Invalid UUID: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid session ID format: {e}")
+    except Exception as e:
+        print(f"ERROR: [generate_soap_note] {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to generate SOAP note: {str(e)}")
+
+
 @router.post("/api/triage/sign_note/{session_id}")
 async def sign_note_v2(session_id: str, req: SignNoteRequest, user_id: str = Depends(verify_clerk_token)):
     async with AsyncSessionLocal() as db:
-        await CareFlowService.sign_note(db, uuid.UUID(session_id), req.assessment_plan)
+        ok = await CareFlowService.sign_note(
+            db,
+            uuid.UUID(session_id),
+            clinical_note=req.assessment_plan or "",
+            soap_note={
+                "subjective": req.subjective or "",
+                "objective": req.objective_note or "",
+                "assessment": req.assessment or "",
+                "plan": req.plan or "",
+            },
+        )
+        if not ok:
+            raise HTTPException(status_code=500, detail="Failed to persist signed SOAP note")
         return {"status": "success"}
+
+
+# ---------------------------------------------------------------------------
+# POST /api/triage/register - Register new patient and add to queue
+# ---------------------------------------------------------------------------
+@router.post("/api/triage/register")
+async def register_patient(req: RegisterPatientRequest, user_id: str = Depends(verify_clerk_token)):
+    """Register a new patient and add to queue."""
+    try:
+        uid = user_id.get("sub")
+        h_id = await _get_hospital_id(uid)
+        if not h_id:
+            raise HTTPException(403, "No hospital assigned to profile")
+        
+        async with AsyncSessionLocal() as db:
+            patient = await CareFlowService.register_patient(
+                db, h_id,
+                name=req.name,
+                ic_number=req.ic_number,
+                phone=req.phone,
+                email=req.email,
+                complaint=req.complaint,
+                level=req.level
+            )
+            return {
+                "status": "success",
+                "patient_id": str(patient.id),
+                "name": patient.full_name
+            }
+    except Exception as e:
+        print(f"ERROR: [register_patient] {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to register patient: {str(e)}")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/patients/search - Search patients by name
+# ---------------------------------------------------------------------------
+# @router.get("/api/patients/search")
+# async def search_patients(q: str, user_id: str = Depends(verify_clerk_token)):
+#     """Search existing patients by name."""
+#     try:
+#         uid = user_id.get("sub")
+#         h_id = await _get_hospital_id(uid)
+#         if not h_id:
+#             return {"patients": []}
+        
+#         async with AsyncSessionLocal() as db:
+#             patients = await CareFlowService.search_patients(db, h_id, q)
+#             return {
+#                 "patients": [
+#                     {
+#                         "id": str(p.id),
+#                         "name": p.full_name,
+#                         "ic_number": p.ic_number,
+#                         "phone": p.phone,
+#                         "email": p.email,
+#                         "complaint": p.metadata_data.get("complaint") if p.metadata_data else None,
+#                         "level": p.metadata_data.get("level") if p.metadata_data else 3
+#                     }
+#                     for p in patients
+#                 ]
+#             }
+#     except Exception as e:
+#         print(f"ERROR: [search_patients] {type(e).__name__}: {e}")
+#         return {"patients": []}
+@router.get("/api/patients/search")
+async def search_patients(q: str, user_id: str = Depends(verify_clerk_token)):
+    try:
+        uid = user_id.get("sub")
+        h_id = await _get_hospital_id(uid)
+
+        print("=== SEARCH DEBUG ===")
+        print("USER:", uid)
+        print("HOSPITAL:", h_id)
+        print("QUERY:", q)
+
+        async with AsyncSessionLocal() as db:
+            patients = await CareFlowService.search_patients(db, h_id, q)
+
+            print("FOUND PATIENTS:", len(patients))
+
+            return {
+                "patients": [
+                    {
+                        "id": str(p.id),
+                        "name": p.full_name,   # ✅ match frontend
+                        "ic_number": p.ic_number,
+                        "phone": p.phone,
+                        "email": p.email,
+                        "complaint": p.metadata_data.get("complaint") if p.metadata_data else None,
+                        "level": p.metadata_data.get("level") if p.metadata_data else 3
+                    }
+                    for p in patients
+                ]
+            }
+
+    except Exception as e:
+        print(f"ERROR: [search_patients] {type(e).__name__}: {e}")
+        return {"patients": []}
+
+# ---------------------------------------------------------------------------
+# GET /api/doctors - Get all doctors for hospital
+# ---------------------------------------------------------------------------
+@router.get("/api/doctors")
+async def get_doctors(user_id: str = Depends(verify_clerk_token)):
+    """Get all doctors for the user's hospital."""
+    try:
+        uid = user_id.get("sub")
+        h_id = await _get_hospital_id(uid)
+        if not h_id:
+            return {"doctors": []}
+        
+        async with AsyncSessionLocal() as db:
+            doctors = await CareFlowService.get_doctors_by_hospital(db, h_id)
+            return {
+                "doctors": [
+                    {
+                        "id": str(d.id),
+                        "name": d.full_name,
+                        "department_id": str(d.department_id) if d.department_id else None,
+                        "department_name": d.department.name if d.department else None
+                    }
+                    for d in doctors
+                ]
+            }
+    except Exception as e:
+        print(f"ERROR: [get_doctors] {type(e).__name__}: {e}")
+        return {"doctors": []}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/departments/{dept_id}/doctors - Filter doctors by department
+# ---------------------------------------------------------------------------
+# @router.get("/api/departments/{dept_id}/doctors")
+# async def get_doctors_by_department(dept_id: str, user_id: str = Depends(verify_clerk_token)):
+#     """Get doctors for a specific department."""
+#     try:
+#         async with AsyncSessionLocal() as db:
+#             doctors = await CareFlowService.get_doctors_by_department(db, uuid.UUID(dept_id))
+#             return {
+#                 "doctors": [
+#                     {
+#                         "id": str(d.id),
+#                         "name": d.full_name,
+#                         "department_id": str(d.department_id) if d.department_id else None
+#                     }
+#                     for d in doctors
+#                 ]
+#             }
+#     except Exception as e:
+#         print(f"ERROR: [get_doctors_by_department] {type(e).__name__}: {e}")
+#         return {"doctors": []}
+@router.get("/api/departments/{dept_id}/doctors")
+async def get_doctors_by_department(
+    dept_id: str,
+    user_id: str = Depends(verify_clerk_token)
+):
+    try:
+        async with AsyncSessionLocal() as db:
+            doctors = await CareFlowService.get_doctors_by_department(
+                db, uuid.UUID(dept_id)
+            )
+
+            return {
+                "doctors": [
+                    {
+                        "id": doc["id"],
+                        "full_name": doc["full_name"],
+                        "department_id": doc.get("department_id"),
+                        "room_id": doc.get("room_id")  
+                    }
+                    for doc in doctors
+                ]
+            }
+
+    except Exception as e:
+        print(f"ERROR: {e}")
+        return {"doctors": []}
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/patients/{patient_id}/vitals - Update patient vitals
+# ---------------------------------------------------------------------------
+@router.patch("/api/patients/{patient_id}/vitals")
+async def update_patient_vitals(patient_id: str, req: UpdateVitalsRequest, user_id: str = Depends(verify_clerk_token)):
+    """Update patient vital signs."""
+    try:
+        async with AsyncSessionLocal() as db:
+            success = await CareFlowService.update_patient_vitals(
+                db, uuid.UUID(patient_id),
+                bp=req.blood_pressure,
+                hr=req.heart_rate,
+                o2=req.oxygen_saturation
+            )
+            if not success:
+                raise HTTPException(404, "Patient not found")
+            return {"status": "success"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid patient ID: {e}")
+    except Exception as e:
+        print(f"ERROR: [update_patient_vitals] {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update vitals: {str(e)}")
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/admin/departments/{dept_id} - Delete department
+# ---------------------------------------------------------------------------
+@router.delete("/api/admin/departments/{dept_id}")
+async def delete_department(dept_id: str, user_id: str = Depends(verify_clerk_token)):
+    """Delete a department via REST API."""
+    try:
+        result = await supabase_rest.delete_table("departments", dept_id)
+        if result:
+            return {"status": "success"}
+        raise HTTPException(404, "Department not found")
+    except Exception as e:
+        print(f"ERROR: [delete_department] {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete department: {str(e)}")
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/admin/rooms/{room_id} - Delete room
+# ---------------------------------------------------------------------------
+@router.delete("/api/admin/rooms/{room_id}")
+async def delete_room(room_id: str, user_id: str = Depends(verify_clerk_token)):
+    """Delete a room via REST API."""
+    try:
+        result = await supabase_rest.delete_table("rooms", room_id)
+        if result:
+            return {"status": "success"}
+        raise HTTPException(404, "Room not found")
+    except Exception as e:
+        print(f"ERROR: [delete_room] {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete room: {str(e)}")
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/admin/doctors/{doctor_id} - Delete doctor
+# ---------------------------------------------------------------------------
+@router.delete("/api/admin/doctors/{doctor_id}")
+async def delete_doctor(doctor_id: str, user_id: str = Depends(verify_clerk_token)):
+    """Delete a doctor via REST API."""
+    try:
+        result = await supabase_rest.delete_table("doctors", doctor_id)
+        if result:
+            return {"status": "success"}
+        raise HTTPException(404, "Doctor not found")
+    except Exception as e:
+        print(f"ERROR: [delete_doctor] {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete doctor: {str(e)}")
 
 
 # ---------------------------------------------------------------------------
