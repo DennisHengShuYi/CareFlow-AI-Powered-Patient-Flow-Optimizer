@@ -19,16 +19,13 @@ import {
   FileText,
   BriefcaseMedical
 } from 'lucide-react';
-import { CaseCard, type StandardCase, type CaseStatusType } from '../components/CaseCard';
 
 interface Case {
-  rejection_reason: string;
-  workflow_status: string;
   id: string;
   type: string;
   department: string;
-  glStatus: 'none' | 'requested' | 'approved' | 'rejected';
-  claimStatus: 'none' | 'requested' | 'approved' | 'rejected';
+  glStatus: 'none' | 'requested' | 'approved';
+  claimStatus: 'none' | 'requested' | 'approved';
   totalBill: number;
   hasMedicalBill: boolean;
   medicalBillPrice?: number;
@@ -85,7 +82,13 @@ const HOSPITAL_DEPARTMENTS = [
 const API = 'http://127.0.0.1:8002';
 
 // ✅ Module-level pure function — no hooks here
-// Remove local normaliseStatus as it is handled by the data mapping logic or component
+const normaliseStatus = (raw: string | null | undefined): 'none' | 'requested' | 'approved' => {
+  if (!raw) return 'none';
+  const s = raw.toLowerCase();
+  if (s === 'approved') return 'approved';
+  if (s === 'none') return 'none';
+  return 'requested'; // covers: requested, pending, supervision required, etc.
+};
 
 const fetchPatients = async (): Promise<Patient[]> => {
   const token = localStorage.getItem('token');
@@ -106,9 +109,8 @@ const fetchPatients = async (): Promise<Patient[]> => {
         id: c.id,
         type: c.title ?? 'Untitled Case',
         department: c.department ?? 'General',
-        glStatus: c.workflow_status,
+        glStatus: normaliseStatus(c.workflow_status),
         claimStatus: 'none',
-<<<<<<< HEAD
         totalBill: typeof c.medical_bill_price === 'number' ? c.medical_bill_price : parseFloat(c.medical_bill_price || '0'),
         hasMedicalBill: c.has_medical_bill ?? false,
         billUrl: c.bill_url,
@@ -118,12 +120,7 @@ const fetchPatients = async (): Promise<Patient[]> => {
         aiReasoning: c.ai_reasoning,
         generatedDocUrl: c.generated_doc_url,
         claimType: c.claim_type,
-        workflowStatus: c.workflow_status
-=======
-        totalBill: 0,
-        workflow_status: '',
-        rejection_reason: c.rejection_reason
->>>>>>> main
+        workflowStatus: c.workflow_status,
       }));
       return {
         id: p.id,
@@ -377,13 +374,11 @@ export default function Patients() {
 
   const selectedPatient = patients.find(p => p.id === selectedPatientId) ?? null;
 
-<<<<<<< HEAD
-  const renderStatus = (status: 'none' | 'requested' | 'approved' | 'rejected', type: 'GL' | 'Claim', p: Patient, c: Case) => {
+  const renderStatus = (status: 'none' | 'requested' | 'approved', type: 'GL' | 'Claim', p: Patient, c: Case) => {
     const colors = {
       none: { bg: 'var(--neutral-400)', text: 'var(--text-muted)' },
       requested: { bg: '#FFF9C4', text: '#F9A825' },
-      approved: { bg: '#E8F5E9', text: '#2E7D32' },
-      rejected: { bg: '#FFEBEE', text: '#C62828' }
+      approved: { bg: '#E8F5E9', text: '#2E7D32' }
     };
     const current = colors[status];
 
@@ -403,10 +398,10 @@ export default function Patients() {
           {status}
         </div>
         {status === 'requested' && (
-          <button 
+          <button
             onClick={() => {
-              navigate('/claims', { 
-                state: { 
+              navigate('/claims', {
+                state: {
                   patientName: p.name,
                   patientId: p.id,
                   caseId: c.id,
@@ -421,7 +416,7 @@ export default function Patients() {
                   policyUrl: p.policy_url,
                   billUrl: c.billUrl,
                   billPrice: c.totalBill
-                } 
+                }
               });
             }}
             style={{
@@ -437,9 +432,6 @@ export default function Patients() {
       </div>
     );
   };
-=======
-  // Remove local renderStatus as it is now in CaseCard.tsx
->>>>>>> main
 
   // ✅ PatientList defined inside component so it can close over state
   const PatientList = ({
@@ -743,7 +735,6 @@ export default function Patients() {
                   )}
 
                   {selectedPatient.cases.map((c, i) => (
-<<<<<<< HEAD
                     <div key={c.id ?? i} className="card" style={{ padding: '0' }}>
                       <div style={{
                         padding: '1.5rem',
@@ -763,13 +754,13 @@ export default function Patients() {
                           </div>
                         </div>
 
-                        <div style={{ 
-                          display: 'grid', 
-                          gridTemplateColumns: 'repeat(2, 40px)', 
-                          gap: '0.5rem', 
-                          alignItems: 'center' 
+                        <div style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(2, 40px)',
+                          gap: '0.5rem',
+                          alignItems: 'center'
                         }}>
-                          <button 
+                          <button
                             onClick={() => {
                               setEditingCaseId(c.id);
                               setEditCaseTitle(c.type);
@@ -781,8 +772,8 @@ export default function Patients() {
                           >
                             <Pencil size={16} />
                           </button>
-                          
-                          <button 
+
+                          <button
                             onClick={() => {
                               setUploadingCaseId(c.id);
                               setIsUploadBillModalOpen(true);
@@ -794,7 +785,7 @@ export default function Patients() {
                           </button>
 
                           {c.hasMedicalBill ? (
-                            <button 
+                            <button
                               onClick={(e) => {
                                 e.stopPropagation();
                                 if (c.billUrl) {
@@ -809,10 +800,10 @@ export default function Patients() {
                               <FileText size={16} />
                             </button>
                           ) : (
-                            <div style={{ width: '40px' }} /> 
+                            <div style={{ width: '40px' }} />
                           )}
 
-                          <button 
+                          <button
                             onClick={(e) => {
                               e.stopPropagation();
                               handleDeleteCase(c.id);
@@ -842,23 +833,6 @@ export default function Patients() {
                         </div>
                       </div>
                     </div>
-=======
-                    <CaseCard
-                      key={c.id ?? i}
-                      caseData={{
-                        id: c.id,
-                        title: c.type, // Patients.tsx uses .type for title
-                        department: c.department,
-                        status: c.workflow_status,
-                        workflow_status: c.workflow_status,
-                        gl_status: c.glStatus as CaseStatusType,
-                        claim_status: c.claimStatus as CaseStatusType,
-                        totalBill: c.totalBill,
-                        rejection_reason: c.rejection_reason
-                      }}
-                      onClick={() => navigate(`/cases/${c.id}`)}
-                    />
->>>>>>> main
                   ))}
                 </div>
               </div>
@@ -1054,8 +1028,8 @@ export default function Patients() {
                   }}
                 >
                   {isPolicyUploading ? <><Loader2 size={16} className="animate-spin" /> Uploading PDF...</> :
-                   isSubmitting ? <><Loader2 size={16} className="animate-spin" /> Saving...</> :
-                   'Save Changes'}
+                    isSubmitting ? <><Loader2 size={16} className="animate-spin" /> Saving...</> :
+                      'Save Changes'}
                 </button>
               </div>
             </form>
