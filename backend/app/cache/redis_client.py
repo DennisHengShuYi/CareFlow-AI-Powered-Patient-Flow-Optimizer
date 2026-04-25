@@ -143,5 +143,19 @@ class UpstashRedis:
         result = await self._cmd("GET", key)
         return json.loads(result) if result else None
 
+    async def mget_json(self, keys: list[str]) -> list[Optional[dict]]:
+        """Fetch multiple keys in one call and parse JSON."""
+        if not self._enabled or not keys:
+            return [None] * len(keys)
+        # MGET returns a list of strings or nulls
+        results = await self._cmd("MGET", *keys)
+        parsed = []
+        for r in (results or []):
+            if r:
+                parsed.append(json.loads(r))
+            else:
+                parsed.append(None)
+        return parsed
+
 
 redis_client = UpstashRedis()
