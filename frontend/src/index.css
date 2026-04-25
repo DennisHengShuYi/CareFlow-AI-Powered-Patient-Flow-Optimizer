@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
+﻿@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
 
 :root {
   --primary: #1E88E5;
@@ -30,6 +30,10 @@
   --font-h1: 2.5rem;
   --font-h2: 1.5rem;
   --font-p: 1.125rem;
+  --sidebar-block-padding: 2rem;
+  --sidebar-inline-padding: 2rem;
+  --sidebar-brand-gap: 3rem;
+  --sidebar-nav-padding: 1rem 2rem;
 }
 
 @media (max-width: 1200px) {
@@ -45,6 +49,9 @@
     --page-padding: 2rem;
     --font-h1: 2rem;
     --font-h2: 1.25rem;
+    --sidebar-inline-padding: 1.1rem;
+    --sidebar-brand-gap: 1.75rem;
+    --sidebar-nav-padding: 0.9rem 1.1rem;
   }
 }
 
@@ -56,6 +63,10 @@
     --font-h1: 1.75rem;
     --font-h2: 1.125rem;
     --font-p: 1rem;
+    --sidebar-block-padding: 1.25rem;
+    --sidebar-inline-padding: 0.75rem;
+    --sidebar-brand-gap: 1.25rem;
+    --sidebar-nav-padding: 0.75rem 0.8rem;
   }
 }
 
@@ -78,6 +89,7 @@ body {
   background-color: var(--neutral-300);
   margin: 0;
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
 }
 
 h1, h2, h3, h4, h5, h6 {
@@ -286,6 +298,78 @@ a {
   0%, 100% { opacity: 1; }
   50% { opacity: .5; }
 }
+
+.triage-progress-panel {
+  border: 1px solid var(--neutral-400);
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  border-radius: 12px;
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.triage-progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.triage-progress-title {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--secondary);
+}
+
+.triage-progress-time {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.triage-progress-track {
+  width: 100%;
+  height: 8px;
+  border-radius: 9999px;
+  background: var(--neutral-300);
+  overflow: hidden;
+}
+
+.triage-progress-fill {
+  height: 100%;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, var(--primary), var(--tertiary));
+  position: relative;
+  transition: width 0.8s ease;
+}
+
+.triage-progress-fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, transparent 15%, rgba(255, 255, 255, 0.45) 50%, transparent 85%);
+  animation: triageProgressShimmer 1.4s linear infinite;
+}
+
+.triage-progress-status {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+@keyframes triageProgressShimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
 .transition-colors { transition-property: background-color, border-color, color, fill, stroke; transition-duration: 150ms; }
 .scale-105 { transform: scale(1.05); }
 .ring-2 { --ring-offset-shadow: var(--ring-inset) 0 0 0 var(--ring-offset-width) var(--ring-offset-color); --ring-shadow: var(--ring-inset) 0 0 0 calc(2px + var(--ring-offset-width)) var(--ring-color); box-shadow: var(--ring-offset-shadow), var(--ring-shadow), var(--shadow, 0 0 #0000); }
@@ -304,6 +388,277 @@ a {
 
 .responsive-padding {
   padding: var(--page-padding) !important;
+}
+
+.topnav-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1rem 3rem;
+  border-bottom: 1px solid var(--neutral-400);
+  background-color: var(--neutral-100);
+}
+
+.topnav-links {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+}
+
+.topnav-links ul {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  gap: 2rem;
+}
+
+.topnav-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+@media (max-width: 1024px) {
+  .topnav-header {
+    padding: 0.9rem 1.2rem;
+    flex-wrap: wrap;
+  }
+
+  .topnav-links {
+    order: 3;
+    width: 100%;
+    justify-content: flex-start;
+    overflow-x: auto;
+  }
+
+  .topnav-links ul {
+    gap: 1rem;
+    padding-bottom: 0.2rem;
+    white-space: nowrap;
+  }
+
+  .topnav-actions {
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+}
+
+.sidebar-brand {
+  padding: 0 var(--sidebar-inline-padding);
+  margin-bottom: var(--sidebar-brand-gap);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  overflow: hidden;
+}
+
+.sidebar-cta-wrap {
+  padding: 0 calc(var(--sidebar-inline-padding) - 0.5rem);
+  margin-bottom: 2rem;
+  overflow: hidden;
+}
+
+.sidebar-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: var(--sidebar-nav-padding);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.sidebar-footer {
+  padding: 2rem calc(var(--sidebar-inline-padding) - 0.5rem) 0;
+  border-top: 1px solid var(--neutral-400);
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  overflow: hidden;
+}
+
+.appt-context-card {
+  flex: 1;
+  min-width: 220px;
+  background: var(--neutral-200);
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+}
+
+.appt-slot-card {
+  border: 1px solid var(--neutral-400);
+  border-radius: 12px;
+  padding: 1rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.appt-slot-main {
+  min-width: 240px;
+  flex: 1;
+}
+
+.appt-slot-side {
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.55rem;
+}
+
+.facility-row-main {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 260px;
+  flex: 1;
+}
+
+.facility-row-side {
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.55rem;
+}
+
+.facility-map {
+  height: 520px;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid var(--neutral-400);
+}
+
+/* LiveTriage + Departments responsive helpers */
+@media (max-width: 1024px) {
+  .triage-queue-table-header {
+    display: none !important;
+  }
+
+  .triage-queue-row {
+    grid-template-columns: 1fr !important;
+    gap: 0.75rem !important;
+    align-items: flex-start !important;
+  }
+
+  .triage-search-box {
+    max-width: 100% !important;
+    width: 100% !important;
+  }
+
+  .triage-top-actions > .card,
+  .triage-top-actions > button {
+    flex: 1 1 220px;
+  }
+
+  .triage-vitals-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .departments-manage-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .departments-inline-form {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 768px) {
+  .triage-action-row {
+    flex-direction: column;
+  }
+
+  .triage-override-grid {
+    flex-direction: column;
+  }
+
+  .triage-vitals-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .departments-tab-toggle {
+    display: flex !important;
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .departments-tab-toggle > button {
+    flex: 1 1 180px;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .live-triage-page h1,
+  .departments-page h1 {
+    font-size: 1.75rem !important;
+  }
+
+  .triage-top-actions {
+    width: 100%;
+    gap: 0.75rem !important;
+  }
+
+  .triage-top-actions > .card,
+  .triage-top-actions > button {
+    width: 100%;
+  }
+
+  .triage-queue-controls {
+    width: 100%;
+    align-items: stretch !important;
+  }
+
+  .triage-queue-controls > * {
+    width: 100%;
+  }
+
+  .triage-queue-row {
+    padding: 0.85rem !important;
+  }
+
+  .triage-action-row button,
+  .triage-override-grid > div,
+  .departments-inline-form > * {
+    width: 100%;
+  }
+
+  .departments-tab-toggle > button {
+    flex: 1 1 100%;
+  }
+
+  .departments-manage-grid section {
+    padding: 1rem !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .appt-context-card,
+  .appt-slot-main,
+  .appt-slot-side,
+  .facility-row-main,
+  .facility-row-side {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .appt-slot-side,
+  .facility-row-side {
+    align-items: flex-start;
+  }
+
+  .facility-map {
+    height: 360px;
+  }
+}
+
+@media (max-width: 480px) {
+  .facility-map {
+    height: 300px;
+  }
 }
 
 /* Page-level wrapper for Intake / Patient pages */
@@ -342,7 +697,7 @@ a {
   }
 }
 
-/* ── Intake / Patient Page Responsive ─────────────────────── */
+/* â”€â”€ Intake / Patient Page Responsive â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 /* Bottom Navigation Bar (mobile only) */
 .mobile-bottom-nav {
@@ -385,6 +740,12 @@ a {
     transform: none !important;
     min-width: 0;
   }
+  .mobile-bottom-nav > * span {
+    width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
   .mobile-bottom-nav > a.active {
     color: var(--primary);
   }
@@ -392,13 +753,13 @@ a {
   .layout-main {
     padding-bottom: 72px;
   }
-  /* Hide the sidebar on mobile — bottom nav takes over */
+  /* Hide the sidebar on mobile â€” bottom nav takes over */
   .sidebar-hide-mobile {
     display: none !important;
   }
 }
 
-/* On tablets (481–768px): icon-only sidebar, no bottom nav */
+/* On tablets (481â€“768px): icon-only sidebar, no bottom nav */
 @media (min-width: 481px) and (max-width: 768px) {
   .mobile-bottom-nav {
     display: none !important;
@@ -410,7 +771,7 @@ a {
   }
 }
 
-/* Intake page — step 1 card */
+/* Intake page â€” step 1 card */
 .intake-card {
   width: 100%;
   max-width: 800px;
@@ -420,7 +781,7 @@ a {
   box-sizing: border-box;
 }
 
-/* Intake page — step 2 triage results card */
+/* Intake page â€” step 2 triage results card */
 .triage-card {
   width: 100%;
   max-width: 1000px;
@@ -522,7 +883,7 @@ a {
   }
 }
 
-/* Language toggle — right aligned but responsive */
+/* Language toggle â€” right aligned but responsive */
 .lang-toggle-row {
   display: flex;
   justify-content: flex-end;
@@ -613,12 +974,12 @@ a {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════
-   MOBILE RESPONSIVE — Intake Triage Results
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   MOBILE RESPONSIVE â€” Intake Triage Results
    Pictures 1 (Summary), 2 (Hospital Cards), 3 (Reasoning)
-   ═══════════════════════════════════════════════════════════ */
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-/* ── "LLM Triage Complete" title + subtitle: center on mobile/tablet ── */
+/* â”€â”€ "LLM Triage Complete" title + subtitle: center on mobile/tablet â”€â”€ */
 @media (max-width: 1024px) {
   .triage-card-title,
   .triage-card-subtitle {
@@ -626,7 +987,7 @@ a {
   }
 }
 
-/* ── Picture 1: AI Triage Summary — center header + cards ── */
+/* â”€â”€ Picture 1: AI Triage Summary â€” center header + cards â”€â”€ */
 @media (max-width: 1024px) {
   /* Stack assessment label, h2, and urgency pill centrally */
   .triage-header-row {
@@ -660,7 +1021,7 @@ a {
   }
 }
 
-/* ── Picture 2: Hospital Cards — center all inner elements ── */
+/* â”€â”€ Picture 2: Hospital Cards â€” center all inner elements â”€â”€ */
 @media (max-width: 1024px) {
   /* Each hospital card header (#badge + name + specialty badge): stack centrally */
   .hosp-card-header {
@@ -707,7 +1068,7 @@ a {
   }
 }
 
-/* ── Extra polish at very small screens (< 480px) ── */
+/* â”€â”€ Extra polish at very small screens (< 480px) â”€â”€ */
 @media (max-width: 480px) {
   /* Urgency pill: center when stacked */
   .triage-header-row > div:last-child {
@@ -716,3 +1077,10 @@ a {
 }
 
 
+@keyframes fadeInUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes scaleUp { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+.slot-chip { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+.slot-chip:hover:not(:disabled) { border-color: var(--primary) !important; box-shadow: 0 4px 12px rgba(30, 136, 229, 0.1); transform: translateY(-2px); }
+.btn-ghost { display: flex; align-items: center; width: 100%; background: transparent; color: var(--text-main); transition: all 0.15s; }
+.btn-ghost:hover { background: var(--neutral-300); color: var(--primary); }
+.shadow-xl { box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04); }

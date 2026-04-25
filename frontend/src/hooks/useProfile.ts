@@ -10,6 +10,10 @@ export interface Profile {
   location: string | null;
   age: number | null;
   gender: string | null;
+  hospital_id: string | null;
+  hospital?: {
+    name: string;
+  };
   updated_at: string;
 }
 
@@ -31,7 +35,7 @@ export function useProfile() {
       try {
         const { data, error: supError } = await supabase
           .from('profiles')
-          .select('*')
+          .select('*, hospital:hospitals(name)')
           .eq('id', user.id)
           .single();
 

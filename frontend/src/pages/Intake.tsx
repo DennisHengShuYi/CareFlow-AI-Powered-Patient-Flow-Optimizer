@@ -1,15 +1,24 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import LayoutSidebar from '../components/LayoutSidebar';
 import { Link } from 'react-router-dom';
-import { ShieldAlert, HeartPulse, MapPin, CheckCircle2, ChevronRight, ChevronLeft, ArrowLeft, ArrowRight, Mic, Upload, Type, Loader2, X, FileText } from 'lucide-react';
+import { ShieldAlert, HeartPulse, MapPin, CheckCircle2, ChevronRight, ArrowLeft, ArrowRight, Mic, Upload, Type, Loader2, X, FileText } from 'lucide-react';
 import { useAuth } from '@clerk/clerk-react';
 import { useProfile } from '../hooks/useProfile';
+
+const TRIAGE_LOADING_STEPS = [
+  'Analyzing your symptoms...',
+  'Identifying clinical facts...',
+  'Cross-checking urgency patterns...',
+  'Preparing best care pathway...',
+  'Finalizing triage recommendation...',
+];
 
 
 export default function Intake() {
   const { getToken } = useAuth();
   const [step, setStep] = useState<1 | 2>(1);
   const [inputMode, setInputMode] = useState<"none" | "text" | "voice">("text");
+  const [languagePreference, setLanguagePreference] = useState<'auto' | 'en' | 'ms'>('auto');
   const [textInput, setTextInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [triageData, setTriageData] = useState<any>(null);
@@ -34,6 +43,32 @@ export default function Intake() {
   const { profile } = useProfile();
   const [recommendations, setRecommendations] = useState<any[]>([]);
   const [recLoading, setRecLoading] = useState(false);
+  const [userCoords, setUserCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [loadingElapsedSec, setLoadingElapsedSec] = useState(0);
+
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setUserCoords({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        });
+      },
+      () => {
+        // Geolocation denied/unavailable; backend will fall back to profile/location text.
+      },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+    );
+  }, []);
+
+  const getRecognitionLanguage = () => {
+    if (languagePreference === 'ms') return 'ms-MY';
+    if (languagePreference === 'en') return 'en-US';
+    return navigator.language || 'en-US';
+  };
 
   const fetchRecommendations = async (triage: any) => {
     setRecLoading(true);
@@ -49,6 +84,8 @@ export default function Intake() {
           specialist: triage.recommended_specialist || '',
           chief_complaint: triage.chief_complaint || '',
           location: profile?.location || '',
+          latitude: userCoords?.latitude ?? null,
+          longitude: userCoords?.longitude ?? null,
         })
       });
       if (!res.ok) throw new Error('Failed to fetch recommendations');
@@ -71,13 +108,53 @@ export default function Intake() {
     setFollowUpResponse('');
     setIsFollowingUp(false);
     setInputMode('text');
+    setLanguagePreference('auto');
     setRecommendations([]);
+    setAttachedDocContent(null);
+    setAttachedDocName(null);
   };
+
+
+  const [loadingStatus, setLoadingStatus] = useState<string>('');
+
+  useEffect(() => {
+    if (!loading) {
+      setLoadingProgress(0);
+      setLoadingElapsedSec(0);
+      return;
+    }
+
+    const startedAt = Date.now();
+    setLoadingProgress(8);
+    setLoadingStatus(TRIAGE_LOADING_STEPS[0]);
+
+    const timer = window.setInterval(() => {
+      const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
+      const stepIndex = Math.min(Math.floor(elapsedSeconds / 4), TRIAGE_LOADING_STEPS.length - 1);
+
+      setLoadingElapsedSec(elapsedSeconds);
+      setLoadingStatus(TRIAGE_LOADING_STEPS[stepIndex]);
+
+      setLoadingProgress((prev) => {
+        if (prev < 60) return Math.min(prev + 6, 95);
+        if (prev < 85) return Math.min(prev + 3, 95);
+        return Math.min(prev + 1, 95);
+      });
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [loading]);
 
   const processTriageText = async (text: string) => {
     setLoading(true);
+    setLoadingStatus(TRIAGE_LOADING_STEPS[0]);
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute patience
+
     try {
       const token = await getToken();
+      
       const res = await fetch('http://localhost:8002/intake/text', {
         method: 'POST',
         headers: {
@@ -86,16 +163,32 @@ export default function Intake() {
         },
         body: JSON.stringify({ 
           text,
+          language_preference: languagePreference,
           session_id: sessionId 
-        })
+        }),
+        signal: controller.signal
       });
-      if (!res.ok) throw new Error('Failed to process text');
+
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Failed to process triage');
+      }
+
       const data = await res.json();
       
       setTriageData(data.triage);
       setSessionId(data.session_id);
       setNextAction(data.next_action);
       setQuestion(data.question);
+
+      sessionStorage.setItem('latestTriageContext', JSON.stringify({
+        session_id: data.session_id,
+        recommended_specialist: data?.triage?.recommended_specialist || '',
+        urgency: data?.triage?.urgency_score || '',
+        chief_complaint: data?.triage?.chief_complaint || '',
+      }));
       
       if (data.triage) {
         fetchRecommendations(data.triage);
@@ -104,13 +197,20 @@ export default function Intake() {
       setStep(2);
       setIsFollowingUp(false);
       setFollowUpResponse('');
-    } catch (err) {
+      setLoadingProgress(100);
+    } catch (err: any) {
       console.error(err);
-      alert('Triage processing failed. Please check the backend connection.');
+      if (err.name === 'AbortError') {
+        alert('Triage is taking longer than expected due to high clinical reasoning load. Please try again or proceed to the Emergency Department if this is an emergency.');
+      } else {
+        alert(`Triage processing failed: ${err.message || 'Connection Reset'}`);
+      }
     } finally {
       setLoading(false);
+      setLoadingStatus('');
     }
   };
+
 
   const handleTextSubmit = () => {
     if (!textInput.trim() && !attachedDocContent) return;
@@ -135,19 +235,25 @@ export default function Intake() {
           headers: { 'Authorization': `Bearer ${token}` },
           body: formData
       });
-      if (!docRes.ok) throw new Error('File upload failed');
+      
+      if (!docRes.ok) {
+        const errorData = await docRes.json().catch(() => ({ detail: 'Upload failed' }));
+        throw new Error(errorData.detail || 'File upload failed');
+      }
+      
       const docData = await docRes.json();
       
       setAttachedDocContent(docData.content || docData.extracted || "");
       setAttachedDocName(fileName);
       setInputMode('text');
       
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('Failed to upload or process document.');
+      alert(`Document Error: ${err.message}`);
     } finally {
       setLoading(false);
     }
+
   };
 
   const startListening = () => {
@@ -160,7 +266,7 @@ export default function Intake() {
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
     recognition.interimResults = true;
-    recognition.lang = 'en-US';
+    recognition.lang = getRecognitionLanguage();
 
     recognition.onresult = (event: any) => {
       let interim = '';
@@ -232,9 +338,9 @@ export default function Intake() {
         {/* Language toggle */}
         <div className="lang-toggle-row">
           <div style={{ display: 'flex', background: 'var(--neutral-300)', borderRadius: '9999px', padding: '0.25rem', border: '1px solid var(--neutral-400)' }}>
-            <button style={{ padding: '0.25rem 0.75rem', borderRadius: '9999px', background: 'white', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', fontWeight: 600 }}>EN</button>
-            <button style={{ padding: '0.25rem 0.75rem', borderRadius: '9999px', color: 'var(--text-muted)' }}>BM</button>
-            <button style={{ padding: '0.25rem 0.75rem', borderRadius: '9999px', color: 'var(--text-muted)', fontSize: '0.8rem' }}>Code-switch: Auto</button>
+            <button onClick={() => setLanguagePreference('en')} style={{ padding: '0.25rem 0.75rem', borderRadius: '9999px', background: languagePreference === 'en' ? 'white' : 'transparent', boxShadow: languagePreference === 'en' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none', fontWeight: 600, color: languagePreference === 'en' ? 'var(--text-main)' : 'var(--text-muted)' }}>EN</button>
+            <button onClick={() => setLanguagePreference('ms')} style={{ padding: '0.25rem 0.75rem', borderRadius: '9999px', background: languagePreference === 'ms' ? 'white' : 'transparent', boxShadow: languagePreference === 'ms' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none', fontWeight: 600, color: languagePreference === 'ms' ? 'var(--text-main)' : 'var(--text-muted)' }}>BM</button>
+            <button onClick={() => setLanguagePreference('auto')} style={{ padding: '0.25rem 0.75rem', borderRadius: '9999px', background: languagePreference === 'auto' ? 'white' : 'transparent', boxShadow: languagePreference === 'auto' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none', color: languagePreference === 'auto' ? 'var(--text-main)' : 'var(--text-muted)', fontSize: '0.8rem', fontWeight: 600 }}>Code-switch: Auto</button>
           </div>
         </div>
 
@@ -314,6 +420,22 @@ export default function Intake() {
               </div>
             )}
 
+            {loading && (
+              <div className="triage-progress-panel">
+                <div className="triage-progress-header">
+                  <div className="triage-progress-title">
+                    <Loader2 size={15} className="animate-spin" />
+                    Triage engine is running
+                  </div>
+                  <div className="triage-progress-time">{loadingElapsedSec}s</div>
+                </div>
+                <div className="triage-progress-track">
+                  <div className="triage-progress-fill" style={{ width: `${loadingProgress}%` }} />
+                </div>
+                <div className="triage-progress-status">{loadingStatus}</div>
+              </div>
+            )}
+
             {/* Text input */}
             {inputMode === 'text' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -336,13 +458,14 @@ export default function Intake() {
                 />
                 <button
                   onClick={handleTextSubmit}
-                  disabled={loading || !textInput.trim()}
+                  disabled={loading || (!textInput.trim() && !attachedDocContent)}
                   className="btn-primary"
                   style={{ alignSelf: 'flex-end', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
                 >
                   {loading ? <Loader2 size={16} className="animate-spin" /> : <ArrowRight size={16} />}
-                  {loading ? 'Processing...' : 'Analyze Symptoms'}
+                  {loading ? ' ' + loadingStatus : 'Analyze Symptoms'}
                 </button>
+
               </div>
             )}
 
@@ -537,6 +660,20 @@ export default function Intake() {
                               ) : <span />}
                               <Link
                                 to="/appointments"
+                                state={{
+                                  triageContext: {
+                                    session_id: sessionId,
+                                    recommended_specialist: triageData?.recommended_specialist || '',
+                                    urgency: triageData?.urgency_score || '',
+                                    chief_complaint: triageData?.chief_complaint || '',
+                                  },
+                                  hospitalId: hosp.id,
+                                  selectedFacility: {
+                                    id: hosp.id,
+                                    name: hosp.name,
+                                    address: hosp.address,
+                                  },
+                                }}
                                 className="btn-primary"
                                 style={{ padding: '0.5rem 1rem', fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '0.35rem', background: isTop ? 'var(--primary)' : 'var(--neutral-300)', color: isTop ? 'white' : 'var(--text-main)', borderRadius: '9999px' }}
                               >
@@ -681,7 +818,7 @@ export default function Intake() {
                               style={{ fontSize: '0.875rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', flex: 2 }}
                             >
                               {loading ? <Loader2 size={14} className="animate-spin" /> : <ChevronRight size={14} />}
-                              Submit Response
+                              {loading ? ' ' + loadingStatus : 'Submit Response'}
                             </button>
                           </div>
                         </div>

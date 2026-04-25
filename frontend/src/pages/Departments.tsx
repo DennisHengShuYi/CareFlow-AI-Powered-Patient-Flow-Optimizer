@@ -678,6 +678,20 @@ export default function Departments() {
                               {room.doctor_name || "Unstaffed"}
                             </div>
 
+                            <div style={{ fontSize: '0.8rem', display: 'flex', gap: '0.75rem', marginBottom: '1rem', color: 'var(--text-muted)' }}>
+                              <span style={{ display: 'flex', alignItems: 'center', gap: '0.2rem' }} title="Total appointment minutes">
+                                <Clock size={12} /> {room.usage_minutes || 0}m usage
+                              </span>
+                              <span style={{ display: 'flex', alignItems: 'center', gap: '0.2rem' }} title="Scheduled future appointments">
+                                <BookOpen size={12} /> {room.appointment_count || 0} appts
+                              </span>
+                              {dept.rooms.length > 1 && room.usage_minutes === Math.min(...dept.rooms.map((r: any) => r.usage_minutes || 0)) && (
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '0.2rem', color: '#f57c00', fontWeight: 800 }}>
+                                  <Star size={12} fill="#f57c00" /> Next in rotation
+                                </span>
+                              )}
+                            </div>
+
                             {room.in_consult?.length > 0 && (
                               <div
                                 style={{

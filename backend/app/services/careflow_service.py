@@ -1,8 +1,11 @@
 import uuid
-from datetime import datetime
-from sqlalchemy import select, update, delete, func
+from datetime import datetime, timezone
+from sqlalchemy import select, update, delete, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.models.db import Hospital, Department, Doctor, Room, Session as TriageSession, Patient
+from app.models.db import (
+    Hospital, Department, Doctor, Room, Session as TriageSession, Patient, Appointment,
+    APPOINTMENT_STATUS_SCHEDULED
+)
 from app.utils.supabase_client import supabase_rest
 from app.config.llm_provider import llm
 from typing import Optional
@@ -127,6 +130,23 @@ class CareFlowService:
             "select": "*,patients(full_name)"
         })
 
+        # Fetch all future appointments for these rooms
+        appt_counts = {}
+        now_utc = datetime.now(timezone.utc)
+        
+        appt_res = await db.execute(
+            select(Appointment.room_id, func.count(Appointment.id))
+            .where(
+                Appointment.hospital_id == hospital_id,
+                Appointment.scheduled_at >= now_utc,
+                Appointment.status == APPOINTMENT_STATUS_SCHEDULED,
+                Appointment.room_id.is_not(None)
+            )
+            .group_by(Appointment.room_id)
+        )
+        for rid, count in appt_res:
+            appt_counts[rid] = count
+
         # Group sessions by doctor_id for O(1) lookup
         doctor_sessions: dict = {}
         if all_sessions:
@@ -179,6 +199,8 @@ class CareFlowService:
                     "doctor_id": str(r["doctor_id"]) if r.get("doctor_id") else None,
                     "doctor_name": doc_name,
                     "state": state,
+                    "usage_minutes": r.get("usage_minutes") or 0,
+                    "appointment_count": appt_counts.get(uuid.UUID(str(r["id"])), 0),
                     "in_consult": in_consult,
                     "queue": queue
                 })
@@ -207,7 +229,8 @@ class CareFlowService:
                     "rooms_ready": sum(1 for ro in rooms_out if ro["state"] == "ready"),
                     "rooms_staffed": sum(1 for ro in rooms_out if ro["doctor_id"]),
                     "doctors_total": dept_docs_count,
-                    "doctors_in_consult": sum(1 for ro in rooms_out if ro["in_consult"])
+                    "doctors_in_consult": sum(1 for ro in rooms_out if ro["in_consult"]),
+                    "total_appointment_usage": sum(ro["usage_minutes"] for ro in rooms_out)
                 },
                 "rooms": rooms_out,
                 "doctors": dept_doctors 

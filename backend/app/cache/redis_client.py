@@ -17,14 +17,26 @@ from app.config.settings import settings
 
 class UpstashRedis:
     def __init__(self):
-        self._url = settings.UPSTASH_REDIS_REST_URL.rstrip("/")
+        self._url = (settings.UPSTASH_REDIS_REST_URL or "").rstrip("/")
+        self._token = settings.UPSTASH_REDIS_REST_TOKEN or ""
+        self._enabled = bool(
+            self._url
+            and self._token
+            and self._url.startswith(("http://", "https://"))
+        )
         self._headers = {
-            "Authorization": f"Bearer {settings.UPSTASH_REDIS_REST_TOKEN}",
+            "Authorization": f"Bearer {self._token}",
             "Content-Type": "application/json",
         }
 
+        if not self._enabled:
+            print("DEBUG: Upstash Redis not configured; running without Redis-backed sessions/rate-limits.")
+
     async def _cmd(self, *args: Any) -> Any:
         """Execute a single Redis command via POST."""
+        if not self._enabled:
+            return None
+
         if "your-endpoint" in self._url:
              # Fast bypass for local mock if no real DB mapped
              return True
@@ -46,19 +58,27 @@ class UpstashRedis:
     # ------------------------------------------------------------------
     async def set_session(self, session_id: str, data: dict) -> None:
         """Store session data as JSON string with TTL."""
+        if not self._enabled:
+            return
         await self._cmd("SET", f"session:{session_id}", json.dumps(data),
                         "EX", settings.SESSION_TTL_SECONDS)
 
     async def get_session(self, session_id: str) -> Optional[dict]:
+        if not self._enabled:
+            return None
         result = await self._cmd("GET", f"session:{session_id}")
         return json.loads(result) if result else None
 
     async def delete_session(self, session_id: str) -> None:
+        if not self._enabled:
+            return
         await self._cmd("DEL", f"session:{session_id}")
         await self._cmd("DEL", f"session:{session_id}:turns")
 
     async def refresh_session_ttl(self, session_id: str) -> None:
         """Extend both session keys on every activity."""
+        if not self._enabled:
+            return
         await self._cmd("EXPIRE", f"session:{session_id}", settings.SESSION_TTL_SECONDS)
         await self._cmd("EXPIRE", f"session:{session_id}:turns", settings.SESSION_TTL_SECONDS)
 
@@ -67,16 +87,22 @@ class UpstashRedis:
     # ------------------------------------------------------------------
     async def append_turn(self, session_id: str, turn: dict) -> None:
         """RPUSH turn then refresh TTL so idle sessions expire cleanly."""
+        if not self._enabled:
+            return
         await self._cmd("RPUSH", f"session:{session_id}:turns", json.dumps(turn))
         await self.refresh_session_ttl(session_id)
 
     async def get_turns(self, session_id: str) -> list[dict]:
+        if not self._enabled:
+            return []
         results = await self._cmd("LRANGE", f"session:{session_id}:turns", 0, -1)
         if not results:
             return []
         return [json.loads(r) for r in results]
 
     async def get_turn_count(self, session_id: str) -> int:
+        if not self._enabled:
+            return 0
         count = await self._cmd("LLEN", f"session:{session_id}:turns")
         return int(count or 0)
 
@@ -89,6 +115,9 @@ class UpstashRedis:
         Uses INCR + EXPIRE: first call sets the window, subsequent calls
         increment. Window resets naturally after RATE_LIMIT_WINDOW_SECONDS.
         """
+        if not self._enabled:
+            return True
+
         key = f"ratelimit:{identifier}"
         current = await self._cmd("INCR", key)
         current = int(current)
