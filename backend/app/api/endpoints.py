@@ -1408,7 +1408,7 @@ async def upload_supporting_doc(
     """
     Upload any supporting document (PDF, image, etc.) for a case.
     Stores in Supabase Storage bucket 'insurance_policies' under supporting/<case_id>/ path.
-    Returns the public URL — the caller is responsible for tracking labels/URLs.
+    Returns the public URL and persists it to the medical_cases record.
     """
     try:
         print(f"[SUPPORT_DOC] Uploading '{label}' for case {case_id}")
@@ -1428,12 +1428,69 @@ async def upload_supporting_doc(
 
         file_url = f"{supabase_rest.url}/storage/v1/object/public/insurance_policies/{storage_path}"
         print(f"[SUPPORT_DOC] Success: {file_url}")
-        return {"success": True, "label": label, "url": file_url, "filename": file.filename}
+        
+        # PERSIST TO DB
+        # We wrap this in try/except because the column might not exist yet if user hasn't run SQL
+        new_doc = {
+            "id": str(int(time.time() * 1000)),
+            "label": label,
+            "url": file_url,
+            "filename": file.filename
+        }
+        
+        try:
+            case_res = await supabase_rest.query_table("medical_cases", {"select": "supporting_docs", "id": f"eq.{case_id}"})
+            existing_docs = []
+            if case_res and len(case_res) > 0:
+                existing_docs = case_res[0].get("supporting_docs") or []
+            
+            existing_docs.append(new_doc)
+            await supabase_rest.update_table("medical_cases", {"supporting_docs": existing_docs}, {"id": f"eq.{case_id}"})
+        except Exception as db_err:
+            print(f"[SUPPORT_DOC] DB Persistence failed (likely missing column): {db_err}")
+            # We don't crash here so the file is still returned to the frontend
+        
+        return {"success": True, "doc": new_doc}
 
     except HTTPException:
         raise
     except Exception as e:
         print(f"[SUPPORT_DOC] ERROR: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/api/cases/{case_id}/supporting-doc/{doc_id}")
+async def delete_supporting_doc(case_id: str, doc_id: str):
+    """
+    Delete a supporting document from the case record.
+    """
+    try:
+        case_res = await supabase_rest.query_table("medical_cases", {"select": "supporting_docs", "id": f"eq.{case_id}"})
+        if not case_res:
+            raise HTTPException(status_code=404, detail="Case not found")
+            
+        existing_docs = case_res[0].get("supporting_docs") or []
+        updated_docs = [d for d in existing_docs if str(d.get("id")) != doc_id]
+        
+        await supabase_rest.update_table("medical_cases", {"supporting_docs": updated_docs}, {"id": f"eq.{case_id}"})
+        return {"success": True}
+    except Exception as e:
+        print(f"[DELETE_DOC] ERROR: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/cases/{case_id}")
+async def get_case_details(case_id: str):
+    """
+    Fetch details for a specific medical case.
+    """
+    try:
+        case_res = await supabase_rest.query_table("medical_cases", {"id": f"eq.{case_id}", "select": "*"})
+        if not case_res:
+            raise HTTPException(status_code=404, detail="Case not found")
+        return case_res[0]
+    except Exception as e:
+        print(f"[GET_CASE] ERROR: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1523,6 +1580,7 @@ async def orchestrate_insurance_claim(case_id: str, body: dict):
     5. Persistence: Updates DB with claim_type and generated_doc_url.
     """
     claim_type = body.get("type") or "GL" # "GL" or "Claim"
+    supporting_docs = body.get("supporting_docs", [])
     try:
         print(f"[ORCHESTRATE] Starting template-based orchestration for case {case_id} (Type: {claim_type})")
         
@@ -1552,14 +1610,20 @@ async def orchestrate_insurance_claim(case_id: str, body: dict):
             except Exception as e:
                 print(f"[ORCHESTRATE] Failed to extract {label}: {e}")
 
-        await asyncio.gather(
+        tasks = [
             fetch_and_extract(patient_data.get("policy_url"), "Insurance Policy", source_text),
             fetch_and_extract(case_data.get("diagnosis_pdf_url"), "SOAP Diagnosis", source_text),
             fetch_and_extract(bill_data.get("file_url"), "Medical Bill", source_text)
-        )
+        ]
+        
+        for i, doc_url in enumerate(supporting_docs):
+            tasks.append(fetch_and_extract(doc_url, f"Supporting Document {i+1}", source_text))
+
+        await asyncio.gather(*tasks)
 
         # 3. Fetch Templates from insurance_templates bucket
         templates_context = []
+        template_bytes_map = {}
         template_files = []
         if claim_type == "GL":
             template_files = ["Hospital Admission Form.pdf", "Medical Referral Letter Template Doc.pdf"]
@@ -1570,29 +1634,42 @@ async def orchestrate_insurance_claim(case_id: str, body: dict):
             # Construct download URL (assuming public or we have access via rest client pattern)
             url = f"{supabase_rest.url}/storage/v1/object/public/insurance_templates/{filename}"
             await fetch_and_extract(url, f"TEMPLATE: {filename}", templates_context)
+            
+            # Also download raw bytes for PDF stamping
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.get(url)
+                    if resp.status_code == 200:
+                        template_bytes_map[filename] = resp.content
+            except Exception as e:
+                print(f"[ORCHESTRATE] Failed to download raw bytes for {filename}: {e}")
 
         # 4. LLM Analysis & Form Filling
         all_context = "\n\n".join(source_text + templates_context)
         orchestration_prompt = f"""
-You are a Medical Case Coordinator. 
+You are a Medical Data Parser for the CareFlow system.
 Your goal is to perform precision data extraction to generate a {claim_type} request.
 
 ### STEP 1: DATA EXTRACTION
-Analyze the <SOURCE_DOCUMENTS> and prioritize the <OFFICIAL_PATIENT_DATA> to extract:
-- Patient demographics (Name, IC/Passport, DOB, Contact).
-- Clinical details (Diagnosis, ICD-10, symptoms, duration, findings).
-- Policy details (Policy number, resident status).
+Analyze the <SOURCE_DOCUMENTS> and prioritize the <OFFICIAL_PATIENT_DATA>.
 
 ### STEP 2: TEMPLATE MAPPING
-For each document in <TARGET_TEMPLATES>, fill the placeholders exactly.
-- **Checkboxes:** If data matches a checkbox option, replace [ ] with [x].
-- **Dotted Lines:** Replace the dots (e.g., Name.........) with the actual value.
-- **Missing Data:** If a required field is not found in the source, use "N/A".
-- **CLEANUP (CRITICAL):** Remove ALL brackets like [ ], ( ), and placeholder texts like "e.g." after filling in the details. Do not leave any blank brackets behind.
+We have {len(template_files)} template(s) to process.
 
-### STEP 3: OUTPUT
-Return a JSON object containing the "filled" text. Do not summarize. Maintain exact spacing and headers.
-The "title" of the document MUST be the exact template name used.
+If generating the "Hospital Admission Form", map data exactly to these JSON keys:
+   - "patient_name", "nric_passport", "dob", "marital_status", "race", "religion", "nationality", "occupation"
+   - "gender": Map exactly to "Male" or "Female"
+   - "resident_status": Map exactly to "Resident", "Health Tourist", "Tourist", "Foreigner" 
+   - "address", "postcode", "city_town", "state", "country"
+   - "phone_h", "phone_o", "mobile", "email"
+   - "emergency_name", "emergency_nric", "emergency_relationship"
+   - "emergency_address", "emergency_postcode", "emergency_city_town", "emergency_state", "emergency_country"
+   - "emergency_phone_h", "emergency_phone_o", "emergency_mobile", "emergency_email"
+   - "payment_mode": Map exactly to "Cash", "Credit Card", "Guarantee Letter"
+   - "signature_date": Use current date
+Dates must be DD/MM/YYYY. If any information is missing or not found, return an empty string ("") instead of "N/A".
+
+If generating other templates (like "Medical Referral Letter"), provide the full generated text content, replacing all brackets.
 
 <OFFICIAL_PATIENT_DATA>
 {json.dumps(patient_data, indent=2)}
@@ -1606,7 +1683,7 @@ The "title" of the document MUST be the exact template name used.
 {templates_context}
 </TARGET_TEMPLATES>
 
-CRITICAL: You are provided with {len(template_files)} template(s). You MUST return exactly {len(template_files)} object(s) in the "documents" array. Each object must correspond to one of the provided templates.
+CRITICAL: You MUST return exactly {len(template_files)} object(s) in the "documents" array. Each object must correspond to one of the provided templates.
 
 Output format (JSON):
 {{
@@ -1614,7 +1691,45 @@ Output format (JSON):
     "reasoning": "Specify which clinical fields were missing",
     "documents": [
         {{
-            "title": "Exact Template Name",
+            "title": "Hospital Admission Form.pdf",
+            "extracted_data": {{
+                "patient_name": "...",
+                "nric_passport": "...",
+                "dob": "...",
+                "gender": "...",
+                "marital_status": "...",
+                "race": "...",
+                "religion": "...",
+                "nationality": "...",
+                "occupation": "...",
+                "resident_status": "...",
+                "address": "...",
+                "postcode": "...",
+                "city_town": "...",
+                "state": "...",
+                "country": "...",
+                "phone_h": "...",
+                "phone_o": "...",
+                "mobile": "...",
+                "email": "...",
+                "emergency_name": "...",
+                "emergency_nric": "...",
+                "emergency_relationship": "...",
+                "emergency_address": "...",
+                "emergency_postcode": "...",
+                "emergency_city_town": "...",
+                "emergency_state": "...",
+                "emergency_country": "...",
+                "emergency_phone_h": "...",
+                "emergency_phone_o": "...",
+                "emergency_mobile": "...",
+                "emergency_email": "...",
+                "payment_mode": "...",
+                "signature_date": "..."
+            }}
+        }},
+        {{
+            "title": "Medical Referral Letter Template Doc.pdf",
             "content": "Full filled text with all brackets removed..."
         }}
     ]
@@ -1629,12 +1744,155 @@ Output format (JSON):
             "reasoning": res_data.get("reasoning", "Generated based on templates.")
         })
 
-        # 6. PDF Generation (ReportLab)
-        from reportlab.lib.pagesizes import LETTER
+        # 6. PDF Generation (ReportLab + PyPDF Stamping)
+        from reportlab.lib.pagesizes import LETTER, A4
         from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
         from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.pdfgen import canvas
         import time
         import urllib.parse
+        
+        async def generate_filled_pdf(template_bytes, ai_data):
+            from pypdf import PdfReader, PdfWriter
+            import pdfplumber
+            import pytesseract
+            from pytesseract import Output
+            from reportlab.pdfgen import canvas
+            from reportlab.lib.pagesizes import A4
+            import io
+
+            # 1. Image Conversion & OCR Anchor Extraction
+            found_anchors = []
+            try:
+                with pdfplumber.open(io.BytesIO(template_bytes)) as pdf:
+                    page = pdf.pages[0]
+                    # Convert to PIL Image for OCR
+                    im = page.to_image(resolution=300).original
+                
+                # Extract Bounding Boxes
+                ocr_data = pytesseract.image_to_data(im, output_type=Output.DICT)
+                scale = 72.0 / 300.0  # Scale 300 DPI image pixels to 72 DPI PDF Points
+                page_height = A4[1]
+
+                for i, text in enumerate(ocr_data['text']):
+                    text = text.strip()
+                    if text:
+                        pdf_x = ocr_data['left'][i] * scale
+                        pdf_y = ocr_data['top'][i] * scale
+                        pdf_w = ocr_data['width'][i] * scale
+                        pdf_h = ocr_data['height'][i] * scale
+                        
+                        # Invert Y for ReportLab (origin is bottom-left)
+                        rl_y = page_height - pdf_y - (pdf_h / 2)
+                        found_anchors.append({
+                            "text": text,
+                            "x": pdf_x,
+                            "y": rl_y,
+                            "w": pdf_w,
+                            "h": pdf_h
+                        })
+            except Exception as e:
+                print(f"[ORCHESTRATE] OCR Anchor Extraction failed: {e}. Falling back to static coordinates.")
+
+            def get_coords(anchor_cfg):
+                target_word = anchor_cfg["anchor"].lower()
+                anchor_point = anchor_cfg.get("anchor_point", "right")
+                for a in found_anchors:
+                    if target_word in a["text"].lower() and anchor_cfg["min_y"] <= a["y"] <= anchor_cfg["max_y"]:
+                        base_x = a["x"] if anchor_point == "left" else a["x"] + a["w"]
+                        return base_x + anchor_cfg["offset_x"], a["y"] + anchor_cfg["offset_y"]
+                print(f"[ORCHESTRATE] Anchor '{anchor_cfg['anchor']}' not found, using fallback {anchor_cfg['fallback']}")
+                return anchor_cfg["fallback"]
+
+            # Dynamic Anchor Configuration
+            ANCHOR_MAP = {
+                # Patient Details
+                "patient_name": {"anchor": "Name", "min_y": 640, "max_y": 680, "offset_x": 10, "offset_y": -2, "fallback": (120, 660)},
+                "nric_passport": {"anchor": "Passport", "min_y": 640, "max_y": 680, "offset_x": 10, "offset_y": -2, "fallback": (400, 660)},
+                "dob": {"anchor": "DOB", "min_y": 630, "max_y": 670, "offset_x": 10, "offset_y": -2, "fallback": (310, 645)},
+                "marital_status": {"anchor": "Marital", "min_y": 630, "max_y": 670, "offset_x": 40, "offset_y": -2, "fallback": (460, 645)},
+                "race": {"anchor": "Race", "min_y": 610, "max_y": 640, "offset_x": 20, "offset_y": -2, "fallback": (100, 625)},
+                "religion": {"anchor": "Religion", "min_y": 610, "max_y": 640, "offset_x": 30, "offset_y": -2, "fallback": (240, 625)},
+                "nationality": {"anchor": "Nationality", "min_y": 610, "max_y": 640, "offset_x": 30, "offset_y": -2, "fallback": (400, 625)},
+                "occupation": {"anchor": "Occupation", "min_y": 600, "max_y": 630, "offset_x": 30, "offset_y": -2, "fallback": (120, 612)},
+                
+                # Contact Details
+                "address": {"anchor": "Address", "min_y": 500, "max_y": 530, "offset_x": 30, "offset_y": -2, "fallback": (120, 515)},
+                "postcode": {"anchor": "Postcode", "min_y": 470, "max_y": 500, "offset_x": 30, "offset_y": -2, "fallback": (45, 483)},
+                "city_town": {"anchor": "City", "min_y": 470, "max_y": 500, "offset_x": 20, "offset_y": -2, "fallback": (95, 483)},
+                "state": {"anchor": "State", "min_y": 470, "max_y": 500, "offset_x": 20, "offset_y": -2, "fallback": (185, 483)},
+                "country": {"anchor": "Country", "min_y": 470, "max_y": 500, "offset_x": 20, "offset_y": -2, "fallback": (290, 483)},
+                "phone_h": {"anchor": "Phone (H)", "min_y": 450, "max_y": 480, "offset_x": 30, "offset_y": -2, "fallback": (120, 465)},
+                "phone_o": {"anchor": "Phone (O)", "min_y": 450, "max_y": 480, "offset_x": 30, "offset_y": -2, "fallback": (300, 465)},
+                "mobile": {"anchor": "Mobile", "min_y": 450, "max_y": 480, "offset_x": 30, "offset_y": -2, "fallback": (450, 465)},
+                "email": {"anchor": "Email", "min_y": 430, "max_y": 460, "offset_x": 20, "offset_y": -2, "fallback": (120, 450)},
+                
+                # Emergency Contact
+                "emergency_name": {"anchor": "Name", "min_y": 380, "max_y": 410, "offset_x": 30, "offset_y": -2, "fallback": (120, 395)},
+                "emergency_nric": {"anchor": "Passport", "min_y": 380, "max_y": 410, "offset_x": 30, "offset_y": -2, "fallback": (400, 395)},
+                "emergency_relationship": {"anchor": "Relationship", "min_y": 360, "max_y": 390, "offset_x": 30, "offset_y": -2, "fallback": (120, 378)},
+                "emergency_address": {"anchor": "Address", "min_y": 350, "max_y": 380, "offset_x": 30, "offset_y": -2, "fallback": (120, 362)},
+                "emergency_postcode": {"anchor": "Postcode", "min_y": 320, "max_y": 350, "offset_x": 30, "offset_y": -2, "fallback": (45, 330)},
+                "emergency_city_town": {"anchor": "City", "min_y": 320, "max_y": 350, "offset_x": 20, "offset_y": -2, "fallback": (95, 330)},
+                "emergency_state": {"anchor": "State", "min_y": 320, "max_y": 350, "offset_x": 20, "offset_y": -2, "fallback": (185, 330)},
+                "emergency_country": {"anchor": "Country", "min_y": 320, "max_y": 350, "offset_x": 20, "offset_y": -2, "fallback": (290, 330)},
+                "emergency_phone_h": {"anchor": "Phone (H)", "min_y": 300, "max_y": 330, "offset_x": 30, "offset_y": -2, "fallback": (120, 315)},
+                "emergency_phone_o": {"anchor": "Phone (O)", "min_y": 300, "max_y": 330, "offset_x": 30, "offset_y": -2, "fallback": (300, 315)},
+                "emergency_mobile": {"anchor": "Mobile", "min_y": 300, "max_y": 330, "offset_x": 30, "offset_y": -2, "fallback": (450, 315)},
+                "emergency_email": {"anchor": "Email", "min_y": 280, "max_y": 310, "offset_x": 20, "offset_y": -2, "fallback": (120, 298)},
+                
+                # Signature Date
+                "signature_date": {"anchor": "Date", "min_y": 10, "max_y": 50, "offset_x": 20, "offset_y": 0, "fallback": (410, 28)},
+            }
+            CHECKBOX_ANCHOR_MAP = {
+                "gender": {
+                    "Male": {"anchor": "Male", "anchor_point": "left", "min_y": 630, "max_y": 660, "offset_x": -15, "offset_y": -1, "fallback": (75, 648)},
+                    "Female": {"anchor": "Female", "anchor_point": "left", "min_y": 630, "max_y": 660, "offset_x": -15, "offset_y": -1, "fallback": (130, 648)}
+                },
+                "resident_status": {
+                    "Resident": {"anchor": "Resident", "anchor_point": "left", "min_y": 570, "max_y": 590, "offset_x": -15, "offset_y": -1, "fallback": (55, 580)},
+                    "Health Tourist": {"anchor": "Tourist", "anchor_point": "left", "min_y": 550, "max_y": 575, "offset_x": -15, "offset_y": -1, "fallback": (55, 564)},
+                    "Tourist": {"anchor": "Tourist", "anchor_point": "left", "min_y": 535, "max_y": 555, "offset_x": -15, "offset_y": -1, "fallback": (55, 547)},
+                    "Foreigner": {"anchor": "Foreigner", "anchor_point": "left", "min_y": 520, "max_y": 540, "offset_x": -15, "offset_y": -1, "fallback": (55, 531)}
+                },
+                "payment_mode": {
+                    "Cash": {"anchor": "Cash", "anchor_point": "left", "min_y": 240, "max_y": 270, "offset_x": -15, "offset_y": -1, "fallback": (48, 252)},
+                    "Credit Card": {"anchor": "Credit", "anchor_point": "left", "min_y": 240, "max_y": 270, "offset_x": -15, "offset_y": -1, "fallback": (157, 252)},
+                    "Guarantee Letter": {"anchor": "Guarantee", "anchor_point": "left", "min_y": 240, "max_y": 270, "offset_x": -15, "offset_y": -1, "fallback": (303, 252)}
+                }
+            }
+
+            packet = io.BytesIO()
+            can = canvas.Canvas(packet, pagesize=A4)
+            can.setFont("Helvetica", 10)
+
+            # Stamp Text Fields
+            for field, value in ai_data.items():
+                if field in ANCHOR_MAP and value and value != "N/A":
+                    x, y = get_coords(ANCHOR_MAP[field])
+                    can.drawString(x, y, str(value))
+
+            # Stamp Checkboxes (X marks)
+            for field, choice in ai_data.items():
+                if field in CHECKBOX_ANCHOR_MAP and choice in CHECKBOX_ANCHOR_MAP[field]:
+                    x, y = get_coords(CHECKBOX_ANCHOR_MAP[field][choice])
+                    can.drawString(x, y, "X")
+
+            can.save()
+            packet.seek(0)
+
+            # Merge with Scanned Background
+            existing_pdf = PdfReader(io.BytesIO(template_bytes))
+            overlay_pdf = PdfReader(packet)
+            output = PdfWriter()
+
+            page = existing_pdf.pages[0]
+            page.merge_page(overlay_pdf.pages[0])
+            output.add_page(page)
+
+            out_packet = io.BytesIO()
+            output.write(out_packet)
+            return out_packet.getvalue()
         
         styles = getSampleStyleSheet()
         generated_urls = []
@@ -1647,27 +1905,42 @@ Output format (JSON):
             safe_title = "".join([c for c in doc_title if c.isalnum() or c in (' ', '-', '_')]).strip()
             safe_patient_name = "".join([c for c in patient_name if c.isalnum() or c in (' ', '-', '_')]).strip()
             
-            buffer = BytesIO()
-            doc = SimpleDocTemplate(buffer, pagesize=LETTER)
-            story = []
+            pdf_bytes = None
             
-            story.append(Paragraph(doc_title, styles['Title']))
-            story.append(Spacer(1, 12))
+            # Try Coordinate Stamping if it's the Admission Form and we have data/bytes
+            if "Admission Form" in doc_title and "extracted_data" in g_doc and doc_title in template_bytes_map:
+                try:
+                    pdf_bytes = await generate_filled_pdf(template_bytes_map[doc_title], g_doc["extracted_data"])
+                except Exception as e:
+                    print(f"[ORCHESTRATE] Failed to stamp PDF for {doc_title}: {e}")
             
-            # Split content by lines and wrap in paragraphs
-            for line in g_doc.get("content", "").split('\n'):
-                if line.strip():
-                    # Basic bolding detection for "Key: Value" or "Header:"
-                    if ":" in line and len(line.split(":")[0]) < 30:
-                        parts = line.split(":", 1)
-                        story.append(Paragraph(f"<b>{parts[0]}:</b> {parts[1]}", styles['Normal']))
-                    else:
-                        story.append(Paragraph(line, styles['Normal']))
-                    story.append(Spacer(1, 6))
+            # Fallback to standard Text generation if stamping failed or it's a different form
+            if not pdf_bytes:
+                buffer = BytesIO()
+                doc = SimpleDocTemplate(buffer, pagesize=LETTER)
+                story = []
+                
+                story.append(Paragraph(doc_title, styles['Title']))
+                story.append(Spacer(1, 12))
+                
+                content = g_doc.get("content", "")
+                if not content and "extracted_data" in g_doc:
+                    content = str(g_doc["extracted_data"])
+                
+                # Split content by lines and wrap in paragraphs
+                for line in content.split('\n'):
+                    if line.strip():
+                        # Basic bolding detection for "Key: Value" or "Header:"
+                        if ":" in line and len(line.split(":")[0]) < 30:
+                            parts = line.split(":", 1)
+                            story.append(Paragraph(f"<b>{parts[0]}:</b> {parts[1]}", styles['Normal']))
+                        else:
+                            story.append(Paragraph(line, styles['Normal']))
+                        story.append(Spacer(1, 6))
 
-            doc.build(story)
-            pdf_bytes = buffer.getvalue()
-            buffer.close()
+                doc.build(story)
+                pdf_bytes = buffer.getvalue()
+                buffer.close()
 
             # Upload each file
             # Format: [Patient Name] - [Template Name]_[timestamp].pdf
