@@ -5,7 +5,7 @@ import {
   CheckCircle2, Circle, Lock, Plus, ExternalLink,
   UploadCloud, X, Loader2, Pencil, ShieldCheck
 } from 'lucide-react';
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 const API = 'http://127.0.0.1:8002';
 
@@ -45,6 +45,32 @@ export default function Claims() {
   const [generatedDocUrl, setGeneratedDocUrl] = useState<string | null>(initialGeneratedDocUrl);
   const [workflowStatus, setWorkflowStatus]   = useState<string | null>(initialWorkflowStatus);
   const [supportingDocs, setSupportingDocs]   = useState<SupportingDoc[]>([]);
+  const [orchestrationProgress, setOrchestrationProgress] = useState(0);
+
+  // ── Persistence: Fetch latest docs on mount ────────────────
+  useEffect(() => {
+    async function fetchCaseData() {
+      if (!caseId) return;
+      try {
+        const token = localStorage.getItem('token');
+        const res = await fetch(`${API}/api/cases/${caseId}`, {
+          headers: { Authorization: token ? `Bearer ${token}` : '' }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.supporting_docs) {
+            setSupportingDocs(data.supporting_docs);
+          }
+          // Also sync other states if needed
+          if (data.generated_doc_url) setGeneratedDocUrl(data.generated_doc_url);
+          if (data.diagnosis_pdf_url) setDiagnosisPdfUrl(data.diagnosis_pdf_url);
+        }
+      } catch (err) {
+        console.error('Failed to fetch case data:', err);
+      }
+    }
+    fetchCaseData();
+  }, [caseId]);
 
   // ── Modal state ─────────────────────────────────────────────
   const [modal, setModal] = useState<'policy' | 'bill' | 'support' | 'diagnosis' | null>(null);
@@ -144,17 +170,30 @@ export default function Claims() {
       });
       if (!res.ok) throw new Error((await res.json()).detail || 'Upload failed');
       const data = await res.json();
-      setSupportingDocs(prev => [...prev, {
-        id: Date.now(),
-        label: data.label,
-        filename: data.filename,
-        url: data.url,
-      }]);
+      // Data returns the new doc object
+      if (data.doc) {
+        setSupportingDocs(prev => [...prev, data.doc]);
+      }
       closeModal();
     } catch (err: any) {
       setUploadError(err.message);
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function handleDeleteDoc(docId: string | number) {
+    if (!caseId || !window.confirm('Delete this supporting document?')) return;
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${API}/api/cases/${caseId}/supporting-doc/${docId}`, {
+        method: 'DELETE',
+        headers: { Authorization: token ? `Bearer ${token}` : '' },
+      });
+      if (!res.ok) throw new Error('Delete failed');
+      setSupportingDocs(prev => prev.filter(d => String(d.id) !== String(docId)));
+    } catch (err: any) {
+      alert(err.message);
     }
   }
 
@@ -187,6 +226,16 @@ export default function Claims() {
     if (!caseId) return;
     setOrchestrating(true);
     setUploadError(null);
+    setOrchestrationProgress(0);
+    
+    // Progress simulation
+    const timer = setInterval(() => {
+      setOrchestrationProgress(prev => {
+        if (prev >= 90) return prev;
+        return prev + 5;
+      });
+    }, 800);
+
     try {
       const token = localStorage.getItem('token');
       const res = await fetch(`${API}/api/cases/${caseId}/orchestrate`, {
@@ -195,17 +244,25 @@ export default function Claims() {
           'Authorization': token ? `Bearer ${token}` : '',
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ type: initialClaimType }),
+        body: JSON.stringify({ 
+          type: initialClaimType,
+          supporting_docs: supportingDocs.map(d => d.url)
+        }),
       });
       if (!res.ok) throw new Error((await res.json()).detail || 'Orchestration failed');
       const data = await res.json();
-      setConfidenceScore(data.confidence_score);
-      setAiReasoning(data.ai_reasoning);
-      setGeneratedDocUrl(data.generated_doc_url);
+      setOrchestrationProgress(100);
+      setTimeout(() => {
+        setConfidenceScore(data.confidence_score);
+        setAiReasoning(data.ai_reasoning);
+        setGeneratedDocUrl(data.generated_doc_url);
+        setOrchestrating(false);
+      }, 500);
     } catch (err: any) {
       setUploadError(err.message);
-    } finally {
       setOrchestrating(false);
+    } finally {
+      clearInterval(timer);
     }
   }
 
@@ -267,7 +324,7 @@ export default function Claims() {
 
   // ── Document row ─────────────────────────────────────────────
   const DocRow = ({
-    icon, title, subtitle, url, onEdit, status
+    icon, title, subtitle, url, onEdit, status, onDelete
   }: {
     icon: React.ReactNode;
     title: string;
@@ -275,6 +332,7 @@ export default function Claims() {
     url?: string;
     onEdit?: () => void;
     status?: 'ok' | 'missing';
+    onDelete?: () => void;
   }) => (
     <div style={{
       background: 'var(--neutral-300)', padding: '1rem 1.25rem', borderRadius: '14px',
@@ -312,6 +370,15 @@ export default function Claims() {
             style={{ background: 'white', border: '1px solid var(--neutral-400)', padding: '5px 10px', borderRadius: 8, cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, fontSize: '0.72rem', fontWeight: 600 }}
           >
             <Pencil size={12} /> {url ? 'Replace' : 'Upload'}
+          </button>
+        )}
+        {onDelete && (
+          <button
+            onClick={onDelete}
+            title="Delete"
+            style={{ background: '#ffebee', border: 'none', padding: '5px', borderRadius: 8, cursor: 'pointer', color: '#c62828', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          >
+            <X size={14} />
           </button>
         )}
         <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 2 }}>
@@ -383,6 +450,7 @@ export default function Claims() {
                 subtitle={doc.filename}
                 url={doc.url}
                 status="ok"
+                onDelete={() => handleDeleteDoc(doc.id)}
               />
             ))}
 
@@ -412,10 +480,23 @@ export default function Claims() {
 
           <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '1.5rem', flex: 1, justifyContent: 'center' }}>
             {orchestrating ? (
-              <div style={{ textAlign: 'center', padding: '2rem' }}>
-                <Loader2 size={48} className="animate-spin" color="var(--secondary)" style={{ margin: '0 auto 1.5rem' }} />
-                <div style={{ fontWeight: 700, marginBottom: '0.5rem' }}>AI is analyzing documents...</div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Extracting clinical data and checking policy compliance.</div>
+              <div style={{ textAlign: 'center', padding: '2rem', width: '100%' }}>
+                <div style={{ 
+                  height: 8, width: '100%', background: 'var(--neutral-400)', borderRadius: 4, overflow: 'hidden', marginBottom: '1.5rem', position: 'relative'
+                }}>
+                  <div style={{ 
+                    height: '100%', background: 'var(--primary)', width: `${orchestrationProgress}%`, transition: 'width 0.4s ease-out'
+                  }} />
+                </div>
+                <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--secondary)', marginBottom: '0.5rem' }}>
+                  {orchestrationProgress}%
+                </div>
+                <div style={{ fontWeight: 700, marginBottom: '0.5rem' }}>AI Orchestration in progress...</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                  {orchestrationProgress < 30 ? 'Fetching clinical evidence...' : 
+                   orchestrationProgress < 70 ? 'Synthesizing with policy rules...' : 
+                   'Finalizing medical documents...'}
+                </div>
               </div>
             ) : generatedDocUrl ? (
               <div style={{ textAlign: 'center', padding: '2rem' }}>
