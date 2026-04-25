@@ -2,6 +2,11 @@
 
 MediRoute is a full-stack AI-powered healthcare platform designed to optimize patient flow through multi-modal triage (text, voice, documents) and automated insurance orchestration.
 
+[Quality Assurance Testing.pdf](https://github.com/user-attachments/files/27091002/Quality.Assurance.Testing.pdf)
+[System Analysis Design.pdf](https://github.com/user-attachments/files/27091000/System.Analysis.Design.pdf)
+[Product Requirement Document.pdf](https://github.com/user-attachments/files/27090994/Product.Requirement.Document.pdf)
+
+
 ## Architecture
 | Layer | Technology | Port |
 |---|---|---|
