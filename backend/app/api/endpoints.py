@@ -3254,49 +3254,70 @@ async def reject_status(
         return {"status": "rejected", "message": "Claim rejected"}
  
 # ─────────────────────────────────────────────
-#  GET /api/patients/archived
+#  GET /api/patients/history
 # ─────────────────────────────────────────────
-@router.get("/api/patients/archived")
-async def get_archived_patients():
+@router.get("/api/patients/history")
+async def get_history_patients():
     try:
-        print("[PATIENTS] Fetching archived patients...")
+        print("[PATIENTS] Fetching all patient history...")
  
         response = await supabase_rest.query_table(
             "patients",
             {
-                "select": """
-                    id,
-                    full_name,
-                    age,
-                    category,
-                    insurers,
-                    doctor_in_charge,
-                    diagnoses,
-                    medical_cases (
-                        id,
-                        title,
-                        department,
-                        status,
-                        workflow_status,
-                        has_medical_bill,
-                        created_at
-                    )
-                """,
-                "status": "eq.archived",
+                "select": "id, full_name, age, category, status, insurers, doctor_in_charge, policy_url, medical_cases!patient_id(id, title, department, status, workflow_status, has_medical_bill, medical_bill_price, doctor_diagnosis, diagnosis_pdf_url, generated_doc_url, claim_type, created_at, gl_data:gl!gl_id(status), claim_data:claims!claims_id(status), medical_bills!case_id(file_url, total_bill, case_id))",
                 "order": "created_at.desc"
             }
         )
  
-        print(f"[PATIENTS] Archived success. Count = {len(response)}")
+        history_data = []
+ 
+        for p in response:
+            clean_patient = {
+                "id": p.get("id"),
+                "full_name": p.get("full_name"),
+                "age": p.get("age"),
+                "category": p.get("category"),
+                "status": p.get("status"),
+                "insurers": p.get("insurers") or [],
+                "doctor_in_charge": p.get("doctor_in_charge"),
+                "policy_url": p.get("policy_url"),
+                "cases": [
+                    {
+                        "id": c.get("id"),
+                        "title": c.get("title"),
+                        "department": c.get("department"),
+                        "status": c.get("status"),
+                        "workflow_status": c.get("workflow_status"),
+                        "has_medical_bill": c.get("has_medical_bill"),
+                        "medical_bill_price": c.get("medical_bill_price"),
+                        "doctor_diagnosis": c.get("doctor_diagnosis"),
+                        "diagnosis_pdf_url": c.get("diagnosis_pdf_url"),
+                        "generated_doc_url": c.get("generated_doc_url"),
+                        "claim_type": c.get("claim_type"),
+                        "gl": c.get("gl_data"),
+                        "claims": c.get("claim_data"),
+                        "bill_url": next((b.get("file_url") for b in c.get("medical_bills", []) if b.get("case_id") == c.get("id")), 
+                                        c.get("medical_bills", [{}])[0].get("file_url") if c.get("medical_bills") else None),
+                        "created_at": c.get("created_at")
+                    } 
+                    for c in (p.get("medical_cases") or [])
+                ]
+            }
+            
+            # Derive diagnoses from case titles
+            clean_patient["diagnoses"] = [c["title"] for c in clean_patient["cases"]]
+            history_data.append(clean_patient)
+ 
+        print(f"[PATIENTS] History success. Count = {len(history_data)}")
  
         return {
             "success": True,
-            "count": len(response),
-            "data": response
+            "count": len(history_data),
+            "data": history_data
         }
  
     except Exception as e:
-        print(f"[PATIENTS] ARCHIVED ERROR: {str(e)}")
+        print(f"[PATIENTS] HISTORY ERROR: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail={"success": False, "error": str(e)}

@@ -11,7 +11,7 @@ import MyCases from './pages/MyCases';
 import NearbyFacilities from './pages/NearbyFacilities';
 import Patients from './pages/Patients';
 import CaseDetails from './pages/CaseDetails';
-import Archives from './pages/Archives';
+import History from './pages/History';
 import Onboarding from './pages/Onboarding';
 import { useProfile } from './hooks/useProfile';
 import { Loader2 } from 'lucide-react';
@@ -154,7 +154,7 @@ function App() {
         <Route path="/claims" element={<ProtectedRoute allowedRoles={['hospital_staff']}><Claims /></ProtectedRoute>} />
         <Route path="/patients" element={<ProtectedRoute allowedRoles={['hospital_staff']}><Patients /></ProtectedRoute>} />
         <Route path="/cases/:caseId" element={<ProtectedRoute allowedRoles={['hospital_staff']}><CaseDetails /></ProtectedRoute>} />
-        <Route path="/archives" element={<ProtectedRoute allowedRoles={['hospital_staff']}><Archives /></ProtectedRoute>} />
+        <Route path="/history" element={<ProtectedRoute allowedRoles={['hospital_staff']}><History /></ProtectedRoute>} />
 
         {/* Patient Routes */}
         <Route path="/intake" element={<ProtectedRoute allowedRoles={['patient']}><Intake /></ProtectedRoute>} />

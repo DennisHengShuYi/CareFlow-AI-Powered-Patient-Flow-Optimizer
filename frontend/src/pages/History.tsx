@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import LayoutSidebar from '../components/LayoutSidebar';
 import {
-  Archive,
+  History as HistoryIcon,
   ChevronRight,
   Search,
   CreditCard,
@@ -10,14 +10,15 @@ import {
   Clock,
   Loader2,
   ChevronLeft,
-  Users
+  Users,
+  Activity
 } from 'lucide-react';
 import { CaseCard, type StandardCase, type CaseStatusType } from '../components/CaseCard';
 import { AppointmentCard, type StandardAppointment } from '../components/AppointmentCard';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-interface ArchivedCase {
+interface HistoryCase {
   id: string;
   title: string;
   department: string;
@@ -25,16 +26,21 @@ interface ArchivedCase {
   workflowStatus: string;
   createdAt: string;
   rejection_reason: string;
+  glStatus: string;
+  claimStatus: string;
+  totalBill: number;
+  billUrl?: string;
 }
 
-interface ArchivedPatient {
+interface HistoryPatient {
   id: string;
   name: string;
   age: number;
+  status: string; // 'active' or 'archived'
   caseCount: number;
   diagnoses: string[];
   insurers: string[];
-  cases: ArchivedCase[];
+  cases: HistoryCase[];
 }
 
 interface Appointment {
@@ -56,32 +62,37 @@ const API = 'http://127.0.0.1:8002';
 
 // ── Data Fetching ──────────────────────────────────────────────────────────
 
-const fetchArchivedPatients = async (): Promise<ArchivedPatient[]> => {
+const fetchHistoryPatients = async (): Promise<HistoryPatient[]> => {
   const token = localStorage.getItem('token');
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  const response = await fetch(`${API}/api/patients/archived`, { headers });
+  const response = await fetch(`${API}/api/patients/history`, { headers });
   if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 
   const json = await response.json();
   const rawData: any[] = json.data || [];
 
-  return rawData.map((p: any): ArchivedPatient => {
-    const cases: ArchivedCase[] = (p.cases || []).map((c: any): ArchivedCase => ({
+  return rawData.map((p: any): HistoryPatient => {
+    const cases: HistoryCase[] = (p.cases || []).map((c: any): HistoryCase => ({
       id: String(c.id || ''),
       title: c.title ?? 'Untitled Case',
       department: c.department ?? 'General',
-      status: c.status ?? 'archived',
+      status: c.status ?? 'active',
       workflowStatus: c.workflow_status ?? 'none',
       createdAt: c.created_at ? c.created_at.split('T')[0] : '—',
       rejection_reason: c.rejection_reason ?? '',
+      glStatus: c.gl?.status ?? 'none',
+      claimStatus: c.claims?.status ?? 'none',
+      totalBill: c.medical_bill_price ?? 0,
+      billUrl: c.bill_url,
     }));
 
     return {
       id: String(p.id || ''),
       name: p.full_name || 'Anonymous Patient',
       age: p.age ?? 0,
+      status: p.status || 'unknown',
       caseCount: cases.length,
       insurers: p.insurers ?? [],
       diagnoses: p.diagnoses ?? cases.map(c => c.title),
@@ -92,10 +103,10 @@ const fetchArchivedPatients = async (): Promise<ArchivedPatient[]> => {
 
 // ── Main Component ─────────────────────────────────────────────────────────
 
-export default function Archives() {
+export default function History() {
   const navigate = useNavigate();
 
-  const [patients, setPatients] = useState<ArchivedPatient[]>([]);
+  const [patients, setPatients] = useState<HistoryPatient[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
@@ -105,12 +116,12 @@ export default function Archives() {
 
   useEffect(() => {
     setLoading(true);
-    fetchArchivedPatients()
+    fetchHistoryPatients()
       .then(data => {
         setPatients(data);
         if (data.length > 0) setSelectedPatientId(data[0].id);
       })
-      .catch(err => console.error('[Archives] Load error:', err))
+      .catch(err => console.error('[History] Load error:', err))
       .finally(() => setLoading(false));
   }, []);
 
@@ -144,6 +155,17 @@ export default function Archives() {
     p.id.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  const getStatusStyle = (status: string) => {
+    switch (status.toLowerCase()) {
+      case 'active':
+        return { bg: '#E3F2FD', text: '#1E88E5', label: 'Active' };
+      case 'archived':
+        return { bg: '#F5F5F5', text: '#616161', label: 'Archived' };
+      default:
+        return { bg: '#ECEFF1', text: '#455A64', label: status };
+    }
+  };
+
   return (
     <LayoutSidebar>
       <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
@@ -154,7 +176,9 @@ export default function Archives() {
           display: 'flex', flexDirection: 'column', backgroundColor: 'var(--neutral-100)'
         }}>
           <div style={{ padding: '2rem 1.5rem', borderBottom: '1px solid var(--neutral-400)' }}>
-            <h1 style={{ fontSize: '1.75rem', fontWeight: 800, marginBottom: '1.5rem' }}>Archives</h1>
+            <h1 style={{ fontSize: '1.75rem', fontWeight: 800, marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <HistoryIcon size={28} color="var(--primary)" /> History
+            </h1>
             <div style={{ position: 'relative' }}>
               <Search
                 size={18}
@@ -165,7 +189,7 @@ export default function Archives() {
               />
               <input
                 type="text"
-                placeholder="Search archived patients..."
+                placeholder="Search patient records..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 style={{
@@ -181,53 +205,63 @@ export default function Archives() {
             {loading ? (
               <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.875rem', paddingTop: '2rem' }}>
                 <Loader2 size={24} className="animate-spin" style={{ margin: '0 auto 0.75rem', display: 'block', opacity: 0.5 }} />
-                Loading records...
+                Loading history...
               </div>
             ) : filteredPatients.length === 0 ? (
               <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.875rem', paddingTop: '2rem' }}>
-                No archived patients found.
+                No records found.
               </div>
             ) : (
-              // ── Flat list, no category grouping ──
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {filteredPatients.map(p => (
-                  <div
-                    key={p.id}
-                    onClick={() => {
-                      setSelectedPatientId(p.id);
-                      setSelectedCaseId(null);
-                    }}
-                    style={{
-                      padding: '1rem', borderRadius: '12px',
-                      backgroundColor: selectedPatientId === p.id ? 'var(--primary-fixed)' : 'white',
-                      border: selectedPatientId === p.id
-                        ? '1px solid var(--primary)'
-                        : '1px solid var(--neutral-400)',
-                      transition: 'all 0.2s ease',
-                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <div>
-                      <div style={{
-                        fontWeight: 700,
-                        color: selectedPatientId === p.id ? 'var(--primary)' : 'var(--text-main)',
-                        marginBottom: '0.25rem', fontSize: '1rem'
-                      }}>
-                        {p.name}
+                {filteredPatients.map(p => {
+                  const statusInfo = getStatusStyle(p.status);
+                  return (
+                    <div
+                      key={p.id}
+                      onClick={() => {
+                        setSelectedPatientId(p.id);
+                        setSelectedCaseId(null);
+                      }}
+                      style={{
+                        padding: '1rem', borderRadius: '12px',
+                        backgroundColor: selectedPatientId === p.id ? 'var(--primary-fixed)' : 'white',
+                        border: selectedPatientId === p.id
+                          ? '1px solid var(--primary)'
+                          : '1px solid var(--neutral-400)',
+                        transition: 'all 0.2s ease',
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                          <div style={{
+                            fontWeight: 700,
+                            color: selectedPatientId === p.id ? 'var(--primary)' : 'var(--text-main)',
+                            fontSize: '1rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
+                          }}>
+                            {p.name}
+                          </div>
+                          <span style={{
+                            fontSize: '0.6rem', fontWeight: 800, padding: '2px 6px', borderRadius: '4px',
+                            backgroundColor: statusInfo.bg, color: statusInfo.text, textTransform: 'uppercase'
+                          }}>
+                            {statusInfo.label}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', gap: '0.75rem' }}>
+                          <span>{p.age} yrs</span>
+                          <span>•</span>
+                          <span>{p.caseCount} case{p.caseCount !== 1 ? 's' : ''}</span>
+                        </div>
                       </div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', gap: '0.75rem' }}>
-                        <span>{p.age} yrs</span>
-                        <span>•</span>
-                        <span>{p.caseCount} case{p.caseCount !== 1 ? 's' : ''}</span>
-                      </div>
+                      <ChevronRight
+                        size={16}
+                        color={selectedPatientId === p.id ? 'var(--primary)' : 'var(--neutral-500)'}
+                      />
                     </div>
-                    <ChevronRight
-                      size={16}
-                      color={selectedPatientId === p.id ? 'var(--primary)' : 'var(--neutral-500)'}
-                    />
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -244,12 +278,14 @@ export default function Archives() {
               {/* Patient header card */}
               <div className="card" style={{
                 marginBottom: '2rem',
-                background: 'linear-gradient(135deg, #546E7A 0%, #37474F 100%)',
+                background: selectedPatient.status === 'active' 
+                  ? 'linear-gradient(135deg, #1E88E5 0%, #0D47A1 100%)'
+                  : 'linear-gradient(135deg, #546E7A 0%, #37474F 100%)',
                 color: 'white', padding: '2.5rem',
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                 position: 'relative', overflow: 'hidden'
               }}>
-                <Archive
+                <HistoryIcon
                   size={180}
                   style={{ position: 'absolute', right: '-40px', bottom: '-40px', opacity: 0.1, color: 'white' }}
                 />
@@ -260,7 +296,8 @@ export default function Archives() {
                     backgroundColor: 'rgba(255,255,255,0.2)', fontSize: '0.75rem', fontWeight: 700,
                     textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '1rem'
                   }}>
-                    <Archive size={12} /> Archived Record
+                    {selectedPatient.status === 'active' ? <Activity size={12} /> : <Clock size={12} />} 
+                    {selectedPatient.status} Record
                   </div>
                   <h2 style={{ fontSize: '2.5rem', color: 'white', fontWeight: 800, marginBottom: '0.5rem' }}>
                     {selectedPatient.name}
@@ -433,7 +470,7 @@ export default function Archives() {
                         <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
                           <FileCheck size={40} style={{ opacity: 0.15, marginBottom: '1rem' }} />
                           <h3 style={{ fontSize: '1.125rem', fontWeight: 700 }}>No case history</h3>
-                          <p style={{ marginTop: '0.5rem', fontSize: '0.875rem' }}>This patient has no archived medical cases.</p>
+                          <p style={{ marginTop: '0.5rem', fontSize: '0.875rem' }}>This patient has no medical cases.</p>
                         </div>
                       ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
@@ -444,16 +481,16 @@ export default function Archives() {
                                 id: c.id,
                                 title: c.title,
                                 department: c.department,
-                                gl_status: (c.workflowStatus === 'approved' ? 'approved' : c.workflowStatus === 'requested' ? 'requested' : 'none') as CaseStatusType,
-                                claim_status: 'none',
-                                totalBill: 0,
+                                gl_status: c.glStatus as CaseStatusType,
+                                claim_status: c.claimStatus as CaseStatusType,
+                                totalBill: c.totalBill,
                                 rejection_reason: c.rejection_reason,
                                 created_at: c.createdAt,
-                                status: 'Archived',
+                                status: c.status === 'archived' ? 'Archived' : 'Active',
                                 workflow_status: c.workflowStatus
                               }}
                               onClick={() => handleSelectCase(c.id)}
-                              showActions={false}  // ← disables GL/claim action buttons
+                              showActions={false}
                             />
                           ))}
                         </div>
@@ -470,7 +507,7 @@ export default function Archives() {
             }}>
               <Users size={64} style={{ opacity: 0.2, marginBottom: '1.5rem' }} />
               <h3 style={{ fontSize: '1.25rem', fontWeight: 800 }}>Select a Patient</h3>
-              <p style={{ marginTop: '0.5rem', fontSize: '0.875rem' }}>Browse the archive to view historical patient records</p>
+              <p style={{ marginTop: '0.5rem', fontSize: '0.875rem' }}>Browse the clinical history for any patient</p>
             </div>
           ) : null}
         </div>
