@@ -471,15 +471,25 @@ export default function Claims() {
           <h3 style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: '0.75rem' }}>{initialClaimType} Preview</h3>
           <div style={{ flex: 1, minHeight: 120, background: 'var(--neutral-300)', borderRadius: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', marginBottom: '1.5rem', border: generatedDocUrl ? '2px solid var(--secondary)' : 'none' }}>
             {generatedDocUrl ? (
-              <div style={{ textAlign: 'center', padding: '1rem' }}>
+              <div style={{ textAlign: 'center', padding: '1rem', width: '100%' }}>
                 <ShieldCheck size={32} color="var(--secondary)" style={{ marginBottom: '0.5rem' }} />
-                <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '0.5rem' }}>Document Generated</div>
-                <button 
-                  onClick={() => window.open(generatedDocUrl, '_blank')}
-                  style={{ background: 'var(--secondary)', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 8, fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer' }}
-                >
-                  View PDF Form
-                </button>
+                <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '1rem' }}>Documents Generated</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', width: '100%', alignItems: 'center' }}>
+                  {generatedDocUrl.split(',').map((url, index) => {
+                    if (!url.trim()) return null;
+                    const filename = decodeURIComponent(url.split('/').pop() || `Document_${index + 1}.pdf`);
+                    return (
+                      <button 
+                        key={index}
+                        onClick={() => window.open(url, '_blank')}
+                        style={{ background: 'var(--secondary)', color: 'white', border: 'none', padding: '8px 16px', borderRadius: 8, fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer', width: '100%', maxWidth: '250px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                        title={filename}
+                      >
+                        View Form {index + 1}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             ) : (
               <>
