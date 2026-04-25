@@ -851,9 +851,17 @@ export default function LiveTriage() {
 
   if (!data) return null;
 
+  const totalClinicCapacity =
+    boardData?.departments?.reduce((sum: number, dept: any) => {
+      const roomCount = dept.metrics?.rooms_total ?? dept.rooms?.length ?? 0;
+      return sum + roomCount;
+    }, 0) ?? 0;
+
+  const effectiveClinicCapacity = totalClinicCapacity > 0 ? totalClinicCapacity : 50;
+
   const currentUtilization = Math.min(
     100,
-    Math.round((data.queue_active / 20) * 100),
+    Math.round((data.queue_active / effectiveClinicCapacity) * 100),
   );
 
   const chartData =
@@ -1165,7 +1173,7 @@ export default function LiveTriage() {
                   Daily Clinic Load
                 </div>
                 <div style={{ fontSize: "1.25rem", fontWeight: 700 }}>
-                  45 / 50{" "}
+                  {data.queue_active} / {effectiveClinicCapacity}{" "}
                   <span
                     style={{
                       fontSize: "0.875rem",
