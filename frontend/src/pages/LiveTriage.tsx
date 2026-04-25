@@ -776,8 +776,8 @@ export default function LiveTriage() {
     return (
       <LayoutSidebar>
         <div
+          className="responsive-padding"
           style={{
-            padding: "2rem 3rem",
             height: "100%",
             display: "flex",
             alignItems: "center",
@@ -900,8 +900,8 @@ export default function LiveTriage() {
       )}
 
       <div
+        className="responsive-padding live-triage-page"
         style={{
-          padding: "2rem 3rem",
           height: "100%",
           display: "flex",
           flexDirection: "column",
@@ -1007,7 +1007,10 @@ export default function LiveTriage() {
               </div>
             )}
           </div>
-          <div style={{ display: "flex", gap: "1rem" }}>
+          <div
+            className="triage-top-actions"
+            style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}
+          >
             <button
               onClick={() => setShowAddModal(true)}
               className="btn-primary"
@@ -1409,7 +1412,10 @@ export default function LiveTriage() {
                       const timeB = b.time || "";
 
                       // If time is formatted as HH:MM, compare lexicographically.
-                      if (/^\d{2}:\d{2}$/.test(timeA) && /^\d{2}:\d{2}$/.test(timeB)) {
+                      if (
+                        /^\d{2}:\d{2}$/.test(timeA) &&
+                        /^\d{2}:\d{2}$/.test(timeB)
+                      ) {
                         return timeA.localeCompare(timeB);
                       }
 
@@ -1425,12 +1431,10 @@ export default function LiveTriage() {
                       <>
                         {displayedPatients.map((patient: any) => {
                           const isCritical = patient.level === 1;
-                          const isActiveEncounter = !!(
-                            selectedSessionId
-                              ? patient.id === selectedSessionId
-                              : data.active_encounter?.id &&
-                                patient.id === data.active_encounter.id
-                          );
+                          const isActiveEncounter = !!(selectedSessionId
+                            ? patient.id === selectedSessionId
+                            : data.active_encounter?.id &&
+                              patient.id === data.active_encounter.id);
                           return (
                             <div
                               key={patient.id}
@@ -2377,8 +2381,7 @@ export default function LiveTriage() {
                       fontWeight: 600,
                     }}
                   >
-                    {selectedEncounter?.complaint ||
-                      "No complaint recorded."}
+                    {selectedEncounter?.complaint || "No complaint recorded."}
                   </div>
                 </div>
 
@@ -2472,8 +2475,7 @@ export default function LiveTriage() {
                         OXYGEN SAT.
                       </div>
                       <div style={{ fontSize: "1.5rem", fontWeight: 700 }}>
-                        {selectedEncounter?.metadata_data
-                          ?.oxygen_saturation ||
+                        {selectedEncounter?.metadata_data?.oxygen_saturation ||
                           aiSource?.vitals?.o2 ||
                           "-"}
                       </div>
@@ -2545,7 +2547,13 @@ export default function LiveTriage() {
                     <Mic size={20} color="var(--primary)" /> SOAP Note
                     Generation
                   </div>
-                  <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "0.75rem",
+                      flexWrap: "wrap",
+                    }}
+                  >
                     <button
                       type="button"
                       onClick={openRecordingModal}

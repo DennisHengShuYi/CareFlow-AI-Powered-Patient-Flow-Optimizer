@@ -13,6 +13,9 @@ import {
   Trash2,
   AlertCircle,
   ChevronDown,
+  Clock,
+  BookOpen,
+  Star,
 } from "lucide-react";
 import { capacityRoomStyle } from '../utils/capacityRoomStyle';
 
@@ -372,8 +375,8 @@ export default function Departments() {
   return (
     <LayoutSidebar>
       <div
+        className="responsive-padding departments-page"
         style={{
-          padding: "2rem 3rem",
           height: "100%",
           display: "flex",
           flexDirection: "column",
@@ -434,6 +437,7 @@ export default function Departments() {
           </p>
 
           <div
+            className="departments-tab-toggle"
             style={{
               display: "inline-flex",
               background: "var(--neutral-200)",
@@ -569,6 +573,7 @@ export default function Departments() {
                     >
                       {dept.name}
                     </h2>
+
                     <div
                       style={{
                         fontSize: "0.85rem",
@@ -576,15 +581,22 @@ export default function Departments() {
                         fontWeight: 600,
                         display: "flex",
                         gap: "1rem",
+                        flexWrap: "wrap", // from main
                       }}
                     >
                       <span>
                         Rooms: {dept.metrics?.rooms_occupied}/
                         {dept.metrics?.rooms_total}
                       </span>
+
                       <span>
                         Clinicians: {dept.metrics?.doctors_in_consult}/
                         {dept.metrics?.doctors_total}
+                      </span>
+
+                      <span style={{ color: "var(--primary)" }}>
+                        Avg Appt Usage:{" "}
+                        {dept.metrics?.total_appointment_usage || 0}m
                       </span>
                     </div>
                   </div>
@@ -653,7 +665,7 @@ export default function Departments() {
                             <div
                               style={{
                                 fontSize: "0.9rem",
-                                marginBottom: "1rem",
+                                marginBottom: "0.5rem",
                                 display: "flex",
                                 alignItems: "center",
                                 gap: "0.5rem",
