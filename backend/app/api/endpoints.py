@@ -40,7 +40,7 @@ from app.auth.clerk import verify_clerk_token
 from app.cache.redis_client import redis_client
 from app.config.llm_provider import llm
 from app.config.settings import settings
-from app.models.db import AsyncSessionLocal, AuditLog, IntakeLog, Session as SessionModel, Profile, Doctor, Room, Hospital, Department, Appointment, Patient
+from app.models.db import AsyncSessionLocal, AuditLog, IntakeLog, Session as SessionModel, Profile, Doctor, Room, Hospital, Department, Appointment, Patient, APPOINTMENT_STATUS_SCHEDULED
 from app.services.booking_engine import booking_engine
 from app.services.intake_pipeline import intake_pipeline
 from app.services.triage_agent import triage_agent
@@ -190,6 +190,7 @@ class BookRequest(BaseModel):
     session_id: str
     patient_id: str | None = None
     provider_id: str | None = None
+    hospital_id: str | None = None
     scheduled_at: str       # ISO 8601
     urgency: str
     complaint: str
@@ -210,8 +211,42 @@ class SetEncounterRequest(BaseModel):
     patient_id: str
 
 
+class RegisterPatientRequest(BaseModel):
+    name: str
+    ic_number: str
+    phone: str
+    email: str | None = None
+    complaint: str
+    level: int
+
+
+class UpdateVitalsRequest(BaseModel):
+    blood_pressure: str | None = None
+    heart_rate: str | None = None
+    oxygen_saturation: str | None = None
+
+
+class ExtendedOverrideRequest(BaseModel):
+    level: int | None = None
+    diagnosis: str | None = None
+    department_id: str | None = None
+    doctor_id: str | None = None
+    status: str | None = None
+    blood_pressure: str | None = None
+    heart_rate: str | None = None
+    oxygen_saturation: str | None = None
+
+
 class SignNoteRequest(BaseModel):
-    assessment_plan: str
+    assessment_plan: str | None = None
+    subjective: str | None = None
+    objective_note: str | None = None
+    assessment: str | None = None
+    plan: str | None = None
+
+
+class GenerateSoapRequest(BaseModel):
+    objective_note: str | None = ""
 
 
 class OverridePatientRequest(BaseModel):
@@ -225,6 +260,7 @@ class AddDoctorRequest(BaseModel):
     department_id: str
     name: str
     room_id: str | None = None  # optional: assign doctor to a room on creation
+    specialty: str | None = None
 
 class AddRoomRequest(BaseModel):
     department_id: str
@@ -419,8 +455,13 @@ async def intake_text(
         # 4. Multi-Agent Triage Pipeline (Global Discovery)
         print("DEBUG: [Stage 3] Calling Global Multi-Agent Triage...")
         
-        # We now use the Global-to-Local pipeline (decisions are hospital-agnostic initially)
-        pipeline_output = await triage_orchestrator.run_pipeline(raw, language_preference=language_preference)
+        # We now pass 'history' so the AI can remember previous turns (Context-Aware)
+        pipeline_output = await triage_orchestrator.run_pipeline(
+            raw, 
+            language_preference=language_preference,
+            history=history
+        )
+
 
         # Map pipeline output to the frontend expected format
         decision = pipeline_output.get("decision", {})
@@ -469,11 +510,12 @@ async def intake_text(
         lang = result.get("language_detected", "en")
         complete_msg = "Triage selesai" if lang == "ms" else "Triage complete"
         
-        await redis_client.append_turn(session_id, {"role": "user", "content": raw})
+        await redis_client.append_turn(session_id, {"role": "user", "text": raw})
         await redis_client.append_turn(
             session_id,
-            {"role": "agent", "content": follow_up_q or complete_msg},
+            {"role": "assistant", "text": follow_up_q or complete_msg},
         )
+
 
         # 7. Persist session to DB (Wrapped in resilience block)
         print("DEBUG: [Stage 5] Auditing and returning...")
@@ -606,10 +648,8 @@ async def get_session(
         return {
             "id": str(sess.id),
             "urgency_level": sess.urgency_level,
-            "confidence_score": sess.confidence_score,
             "status": sess.status,
             "triage_result": sess.triage_result,
-            "language_detected": sess.language_detected,
         }
 
 
@@ -624,12 +664,20 @@ async def appointment_slots(
     limit: int = 12,
     preferred_window: str = "any",
     auto_expand: bool = True,
+    target_date: str | None = None,
     user: dict = Depends(verify_clerk_token),
 ):
-    slot_limit = max(3, min(limit, 24))
+    slot_limit = max(3, min(limit, 100))
     normalized_window = preferred_window.strip().lower()
     if normalized_window not in {"any", "morning", "afternoon"}:
         normalized_window = "any"
+
+    parsed_date: datetime | None = None
+    if target_date:
+        try:
+            parsed_date = datetime.fromisoformat(target_date.replace('Z', '+00:00'))
+        except ValueError:
+            pass
 
     slots = await booking_engine.get_available_slots(
         specialty,
@@ -637,27 +685,34 @@ async def appointment_slots(
         hospital_id,
         limit=slot_limit,
         preferred_window=normalized_window,
+        target_date=parsed_date,
     )
 
     expanded_from_hospital_filter = False
-    if hospital_id and auto_expand and len(slots) < slot_limit:
+    if hospital_id and auto_expand:
+        # If the primary hospital is busy or has few slots, always try to bring in variety
+        # regardless of whether we hit the initial 'limit'
         extra_slots = await booking_engine.get_available_slots(
             specialty,
             urgency,
             None,
-            limit=slot_limit * 2,
+            limit=24, # Fetch a larger pool for variety
             preferred_window=normalized_window,
+            target_date=parsed_date,
         )
-        seen = {(s.get("doctor_id"), s.get("scheduled_at")) for s in slots}
+        seen = {(s.get("doctor_id"), s.get("hospital_id"), s.get("scheduled_at")) for s in slots}
+        added_count = 0
         for slot in extra_slots:
-            key = (slot.get("doctor_id"), slot.get("scheduled_at"))
+            key = (slot.get("doctor_id"), slot.get("hospital_id"), slot.get("scheduled_at"))
             if key in seen:
                 continue
             slots.append(slot)
             seen.add(key)
-            if len(slots) >= slot_limit:
+            added_count += 1
+            # Allow up to 20 slots total when showing multiple hospitals
+            if len(slots) >= 20:
                 break
-        expanded_from_hospital_filter = len(slots) > 0
+        expanded_from_hospital_filter = added_count > 0
     wait_values = [slot.get("estimated_wait_minutes") for slot in slots if slot.get("estimated_wait_minutes") is not None]
     queue_too_long = not slots or (bool(wait_values) and min(wait_values) >= QUEUE_DIVERSION_THRESHOLD_MINUTES)
 
@@ -689,6 +744,7 @@ async def book_appointment(
             session_id=body.session_id,
             patient_id=body.patient_id,
             provider_id=body.provider_id,
+            hospital_id=body.hospital_id,
             scheduled_at_iso=body.scheduled_at,
             urgency=body.urgency,
             complaint=body.complaint,
@@ -696,20 +752,91 @@ async def book_appointment(
             patient_profile_id=user.get("sub"),
             duration_minutes=body.duration_minutes,
         )
+
+        # ── Room assignment ──────────────────────────────────────────────────
+        # Convert scheduled_at to MYT (UTC+8) and check working hours 08:00-17:00
+        room_label: str | None = None
+        try:
+            from datetime import timedelta
+            MYT_OFFSET = timedelta(hours=8)
+            scheduled_utc = datetime.fromisoformat(body.scheduled_at.replace("Z", "+00:00"))
+            if scheduled_utc.tzinfo is None:
+                scheduled_utc = scheduled_utc.replace(tzinfo=timezone.utc)
+            scheduled_myt = scheduled_utc.astimezone(timezone(MYT_OFFSET))
+            hour_myt = scheduled_myt.hour
+            is_working_hours = 8 <= hour_myt < 17
+
+            if is_working_hours and body.provider_id:
+                async with AsyncSessionLocal() as db:
+                    # Look up the doctor's department
+                    doctor_res = await db.execute(
+                        select(Doctor).where(Doctor.id == uuid.UUID(body.provider_id))
+                    )
+                    doctor = doctor_res.scalar_one_or_none()
+
+                    if doctor and doctor.department_id:
+                        # Find appointment id just created (latest for this patient/session)
+                        appt_res = await db.execute(
+                            text(
+                                "SELECT id FROM appointments "
+                                "WHERE session_id = :sid "
+                                "ORDER BY created_at DESC LIMIT 1"
+                            ),
+                            {"sid": body.session_id},
+                        )
+                        appt_row = appt_res.first()
+
+                        # Get room with lowest usage in the department
+                        room_res = await db.execute(
+                            select(Room)
+                            .where(Room.department_id == doctor.department_id)
+                            .order_by(Room.usage_minutes.asc())
+                            .limit(1)
+                        )
+                        room = room_res.scalar_one_or_none()
+
+                        if room and appt_row:
+                            appt_id = appt_row[0]
+                            # Assign room and increment usage
+                            await db.execute(
+                                text(
+                                    "UPDATE appointments SET room_id = :rid WHERE id = :aid"
+                                ),
+                                {"rid": str(room.id), "aid": str(appt_id)},
+                            )
+                            new_usage = (room.usage_minutes or 0) + (body.duration_minutes or 30)
+                            await db.execute(
+                                text(
+                                    "UPDATE rooms SET usage_minutes = :um WHERE id = :rid"
+                                ),
+                                {"um": new_usage, "rid": str(room.id)},
+                            )
+                            await db.commit()
+                            room_label = room.label
+                            print(f"DEBUG: Assigned room '{room_label}' to appointment {appt_id}")
+        except Exception as room_err:
+            print(f"DEBUG: Room assignment failed (non-fatal): {room_err}")
+        # ────────────────────────────────────────────────────────────────────
+
         latency = int((time.time() - t0) * 1000)
         await _audit(body.session_id, "/appointments/book", body.complaint, latency, 200)
-        return {"status": "confirmed", "fhir_resource": fhir}
+        return {"status": "confirmed", "fhir_resource": fhir, "room_label": room_label}
+    except ValueError as exc:
+        latency = int((time.time() - t0) * 1000)
+        await _audit(body.session_id, "/appointments/book", body.complaint, latency, 409, str(exc))
+        raise HTTPException(status_code=409, detail=str(exc))
     except Exception as exc:
         latency = int((time.time() - t0) * 1000)
         await _audit(body.session_id, "/appointments/book", body.complaint, latency, 500, str(exc))
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+
 @router.get("/appointments/my")
 async def my_appointments(user: dict = Depends(verify_clerk_token)):
     """Return current/upcoming/history appointments for the signed-in patient."""
     clerk_id = user.get("sub") if isinstance(user, dict) else str(user)
-    now = datetime.utcnow().replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
 
     async with AsyncSessionLocal() as db:
         patient_res = await db.execute(
@@ -722,20 +849,21 @@ async def my_appointments(user: dict = Depends(verify_clerk_token)):
         patient_id = patient_row[0]
 
         appt_res = await db.execute(
-            select(Appointment)
+            select(Appointment, Hospital.name)
+            .join(Hospital, Appointment.hospital_id == Hospital.id)
             .where(Appointment.patient_id == patient_id)
             .order_by(Appointment.scheduled_at.desc())
         )
-        appointments = appt_res.scalars().all()
+        appointment_rows = appt_res.all()
 
-        async def enrich(appt: Appointment):
+        async def enrich(appt: Appointment, hosp_name: str):
             people_before = 0
             if appt.doctor_id:
                 queue_res = await db.execute(
                     select(func.count(Appointment.id)).where(
                         and_(
                             Appointment.doctor_id == appt.doctor_id,
-                            Appointment.status == "booked",
+                            Appointment.status == APPOINTMENT_STATUS_SCHEDULED,
                             Appointment.scheduled_at < appt.scheduled_at,
                         )
                     )
@@ -746,15 +874,29 @@ async def my_appointments(user: dict = Depends(verify_clerk_token)):
                     select(func.count(Appointment.id)).where(
                         and_(
                             Appointment.doctor_id.is_(None),
-                            Appointment.status == "booked",
+                            Appointment.status == APPOINTMENT_STATUS_SCHEDULED,
                             Appointment.scheduled_at < appt.scheduled_at,
                         )
                     )
                 )
                 people_before = int(queue_res.scalar() or 0)
 
-            wait_from_time = max(0, int((appt.scheduled_at - now).total_seconds() // 60))
+            appt_at = appt.scheduled_at
+            if appt_at.tzinfo is None:
+                appt_at = appt_at.replace(tzinfo=timezone.utc)
+
+            wait_from_time = max(0, int((appt_at - now).total_seconds() // 60))
             live_wait_minutes = wait_from_time + (people_before * int(appt.duration_minutes or 30))
+
+            # Fetch room label if assigned
+            room_label: str | None = None
+            if appt.room_id:
+                room_res = await db.execute(
+                    select(Room).where(Room.id == appt.room_id)
+                )
+                room = room_res.scalar_one_or_none()
+                if room:
+                    room_label = room.label
 
             return {
                 "id": str(appt.id),
@@ -765,20 +907,22 @@ async def my_appointments(user: dict = Depends(verify_clerk_token)):
                 "status": appt.status,
                 "chief_complaint": appt.chief_complaint,
                 "doctor_id": str(appt.doctor_id) if appt.doctor_id else None,
+                "room_label": room_label,
                 "people_before": people_before,
                 "live_wait_minutes": live_wait_minutes,
+                "hospital_name": hosp_name,
             }
 
-        upcoming_raw = [a for a in appointments if a.scheduled_at >= now and a.status == "booked"]
-        history_raw = [a for a in appointments if a.scheduled_at < now or a.status != "booked"]
+        upcoming_raw = [r for r in appointment_rows if r[0].scheduled_at.replace(tzinfo=timezone.utc if r[0].scheduled_at.tzinfo is None else r[0].scheduled_at.tzinfo) >= now and r[0].status == APPOINTMENT_STATUS_SCHEDULED]
+        history_raw = [r for r in appointment_rows if r[0].scheduled_at.replace(tzinfo=timezone.utc if r[0].scheduled_at.tzinfo is None else r[0].scheduled_at.tzinfo) < now or r[0].status != APPOINTMENT_STATUS_SCHEDULED]
 
         current = None
         if upcoming_raw:
-            nearest = sorted(upcoming_raw, key=lambda a: a.scheduled_at)[0]
-            current = await enrich(nearest)
+            nearest = sorted(upcoming_raw, key=lambda r: r[0].scheduled_at)[0]
+            current = await enrich(nearest[0], nearest[1])
 
-        upcoming = [await enrich(a) for a in sorted(upcoming_raw, key=lambda x: x.scheduled_at)]
-        history = [await enrich(a) for a in history_raw]
+        upcoming = [await enrich(r[0], r[1]) for r in sorted(upcoming_raw, key=lambda x: x[0].scheduled_at)]
+        history = [await enrich(r[0], r[1]) for r in history_raw]
 
         return {
             "current": current,
@@ -960,13 +1104,7 @@ async def recommend_hospitals(
 
     # Prefer nearby hospitals first when location is known.
     NEARBY_RADIUS_KM = 120
-    if user_lat is not None and user_lng is not None:
-        nearby = [c for c in candidates if c["distance_km"] is not None and c["distance_km"] <= NEARBY_RADIUS_KM]
-        if nearby:
-            nearby.sort(key=lambda x: x["distance_km"])
-            return {"recommendations": nearby[:5]}
-
-    # Fallback to global distance sorting if no nearby matches are available.
+    # Return all candidates sorted by distance (nearby first)
     candidates.sort(key=lambda x: (x["distance_km"] if x["distance_km"] is not None else 999999))
     return {"recommendations": candidates[:5]}
 
@@ -987,6 +1125,29 @@ async def nearby_facilities(
         limit=body.limit,
     )
     return {"facilities": facilities}
+
+
+@router.get("/api/departments/all")
+async def get_all_departments():
+    """Fetch all unique department names across all hospitals."""
+    hospitals = await supabase_rest.query_table("hospitals", {
+        "select": "departments(name)",
+        "is_active": "eq.true"
+    })
+    
+    if not hospitals:
+        return {"departments": []}
+    
+    unique_names = set()
+    for h in hospitals:
+        depts = h.get("departments", []) or [] # Ensure it is iterable
+        for d in depts:
+            name = d.get("name")
+            if name:
+                unique_names.add(name)
+                
+    return {"departments": sorted(list(unique_names))}
+
 
 
 async def _get_hospital_id(user_id: str):
@@ -1031,42 +1192,207 @@ async def simulate_patient(req: SimulatePatientRequest, user_id: str = Depends(v
         sess = await CareFlowService.simulate_patient(db, h_id, req.name, req.complaint, req.level)
         return {"status": "success", "session_id": str(sess.id)}
 
-@router.post("/api/triage/override/{session_id}")
-async def override_patient(session_id: str, req: OverridePatientRequest, user_id: str = Depends(verify_clerk_token)):
-    async with AsyncSessionLocal() as db:
-        success = await CareFlowService.override_patient(db, uuid.UUID(session_id), req.dict(exclude_none=True))
-        return {"success": success}
+@router.post("/api/triage/override/{patient_id}")
+async def override_patient(patient_id: str, req: OverridePatientRequest, user_id: str = Depends(verify_clerk_token)):
+    try:
+        print(f"DEBUG: [override_patient] patient_id={patient_id}, req={req.dict()}")
+        async with AsyncSessionLocal() as db:
+            success = await CareFlowService.override_patient(db, uuid.UUID(patient_id), req.dict(exclude_none=True))
+            print(f"DEBUG: [override_patient] success={success}")
+            return {"success": success}
+    except ValueError as e:
+        print(f"ERROR: [override_patient] Invalid UUID: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid patient ID format: {e}")
+    except Exception as e:
+        print(f"ERROR: [override_patient] {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to override patient: {str(e)}")
+
+@router.post("/api/triage/auto_assign/{patient_id}")
+async def auto_assign_patient(patient_id: str, user_id: str = Depends(verify_clerk_token)):
+    try:
+        uid = user_id.get("sub")
+        hospital_id = await _get_hospital_id(uid)
+        if not hospital_id:
+            raise HTTPException(403, "No hospital assigned")
+
+        async with AsyncSessionLocal() as db:
+            assignment = await CareFlowService.auto_assign_patient(db, uuid.UUID(patient_id), hospital_id)
+            if not assignment:
+                raise HTTPException(500, "Auto-assignment failed")
+            return {"success": True, "assignment": assignment}
+    except ValueError as e:
+        print(f"ERROR: [auto_assign_patient] Invalid UUID: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid patient ID format: {e}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"ERROR: [auto_assign_patient] {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to auto-assign patient: {str(e)}")
 
 @router.post("/api/admin/departments")
 async def add_department(req: NewDepartmentBody, user_id: str = Depends(verify_clerk_token)):
     h_id = await _get_hospital_id(user_id.get("sub"))
-    if not h_id: raise HTTPException(403, "No hospital assigned to profile")
+    if not h_id: 
+        raise HTTPException(403, "No hospital assigned to profile")
+    
     async with AsyncSessionLocal() as db:
         dept = await CareFlowService.add_department(db, h_id, req.name)
-        return {"id": str(dept.id), "name": dept.name}
+        
+        # 1. Extract from list if necessary
+        new_dept = dept[0] if isinstance(dept, list) else dept
+        
+        # 2. Handle both Object (dot notation) and Dictionary (bracket notation)
+        if isinstance(new_dept, dict):
+            return {
+                "id": str(new_dept.get("id")), 
+                "name": new_dept.get("name")
+            }
+        
+        # Fallback for class objects
+        return {
+            "id": str(new_dept.id), 
+            "name": new_dept.name
+        }
+
+# @router.post("/api/admin/doctors")
+# async def add_doctor(req: AddDoctorRequest, user_id: str = Depends(verify_clerk_token)):
+#     h_id = await _get_hospital_id(user_id.get("sub"))
+#     if not h_id: raise HTTPException(403)
+#     room_id = uuid.UUID(req.room_id) if req.room_id else None
+#     async with AsyncSessionLocal() as db:
+#         doc = await CareFlowService.add_doctor(db, h_id, uuid.UUID(req.department_id), req.name, room_id)
+#         return {"id": str(doc.id), "name": doc.full_name}
 
 @router.post("/api/admin/doctors")
-async def add_doctor(req: AddDoctorRequest, user_id: str = Depends(verify_clerk_token)):
+async def add_doctor(req: AddDoctorRequest, user_id: dict = Depends(verify_clerk_token)):
     h_id = await _get_hospital_id(user_id.get("sub"))
-    if not h_id: raise HTTPException(403)
-    room_id = uuid.UUID(req.room_id) if req.room_id else None
-    async with AsyncSessionLocal() as db:
-        doc = await CareFlowService.add_doctor(db, h_id, uuid.UUID(req.department_id), req.name, room_id)
-        return {"id": str(doc.id), "name": doc.full_name}
+    if not h_id:
+        raise HTTPException(status_code=403, detail="Unauthorized: Hospital context missing")
+    
+    try:
+        dept_uuid = uuid.UUID(req.department_id)
+        room_uuid = uuid.UUID(req.room_id) if req.room_id else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID format provided")
 
-@router.patch("/api/admin/rooms/{room_id}/assign")
-async def assign_room(room_id: str, req: AssignRoomBody, user_id: str = Depends(verify_clerk_token)):
-    """Assign or unassign a doctor from a room."""
     async with AsyncSessionLocal() as db:
-        doctor_id = uuid.UUID(req.doctor_id) if req.doctor_id else None
-        success = await CareFlowService.assign_doctor_to_room(db, uuid.UUID(room_id), doctor_id)
-        return {"success": success}
+        try:
+            # Pass req.specialty into the service call
+            doc = await CareFlowService.add_doctor(
+                db, 
+                h_id, 
+                dept_uuid, 
+                req.name, 
+                room_uuid,
+                specialty=req.specialty
+            )
+            
+            if not doc:
+                raise Exception("Failed to create doctor record")
+
+            # doc is now confirmed to be a single DICT thanks to the service layer update
+            return {
+                "id": str(doc.get('id', '')), 
+                "name": doc.get('full_name', req.name),
+                "specialty": doc.get('specialty', req.specialty)
+            }
+        except Exception as e:
+            # General error handler for database/logic issues
+            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+# @router.patch("/api/admin/rooms/{room_id}/assign")
+# async def assign_room(room_id: str, req: AssignRoomBody, user_id: str = Depends(verify_clerk_token)):
+#     """Assign or unassign a doctor from a room."""
+#     async with AsyncSessionLocal() as db:
+#         doctor_id = uuid.UUID(req.doctor_id) if req.doctor_id else None
+#         success = await CareFlowService.assign_doctor_to_room(db, uuid.UUID(room_id), doctor_id)
+#         return {"success": success}
+@router.patch("/api/admin/rooms/{room_id}/assign")
+async def assign_doctor_to_room_api(
+    room_id: str,
+    req: AssignRoomBody,
+    user_id: str = Depends(verify_clerk_token)
+):
+    try:
+        target_room_id = str(room_id)
+        target_doctor_id = str(req.doctor_id) if req.doctor_id else None
+
+        print("Assign request:", target_room_id, target_doctor_id)
+
+        # ============================================
+        # STEP 1: Remove doctor from ANY existing room
+        # ============================================
+        if target_doctor_id:
+            current_rooms = await supabase_rest.query_table(
+                "rooms",
+                {"doctor_id": f"eq.{target_doctor_id}"}   
+            ) or []
+
+            print("Rooms currently assigned:", current_rooms)
+
+            for r in current_rooms:
+                await supabase_rest.update_table(
+                    "rooms",
+                    r["id"],                    
+                    {"doctor_id": None}
+                )
+
+        # ============================================
+        # STEP 2: Assign doctor to new room
+        # ============================================
+        if target_room_id:
+            await supabase_rest.update_table(
+                "rooms",
+                target_room_id,               # ✅ FIX: pass STRING id
+                {"doctor_id": target_doctor_id}
+            )
+
+        # ============================================
+        # STEP 3: DEBUG VERIFY
+        # ============================================
+        updated = await supabase_rest.query_table(
+            "rooms",
+            {"id": f"eq.{target_room_id}"}   # ✅ keep eq. for query
+        )
+
+        print("AFTER UPDATE:", updated)
+
+        return {"success": True}
+
+    except Exception as e:
+        print(f"ERROR: {e}")
+        return {"success": False, "detail": str(e)}
+
+# @router.post("/api/admin/rooms")
+# async def add_room(req: AddRoomRequest, user_id: str = Depends(verify_clerk_token)):
+#     async with AsyncSessionLocal() as db:
+#         room = await CareFlowService.add_room(db, uuid.UUID(req.department_id), req.label)
+#         return {"id": str(room.id), "label": room.label}
 
 @router.post("/api/admin/rooms")
 async def add_room(req: AddRoomRequest, user_id: str = Depends(verify_clerk_token)):
     async with AsyncSessionLocal() as db:
+        # We assume req.department_id is passed from your AddRoomRequest schema
         room = await CareFlowService.add_room(db, uuid.UUID(req.department_id), req.label)
-        return {"id": str(room.id), "label": room.label}
+        
+        # 1. Extract from list if necessary (Fixes: AttributeError: 'list' object has no attribute 'id')
+        new_room = room[0] if isinstance(room, list) else room
+        
+        # 2. Handle both Object (dot notation) and Dictionary (bracket notation)
+        if isinstance(new_room, dict):
+            return {
+                "id": str(new_room.get("id")), 
+                "label": new_room.get("label")
+            }
+        
+        return {
+            "id": str(new_room.id), 
+            "label": new_room.label
+        }
 
 @router.post("/api/triage/active_encounter")
 async def set_active_encounter(req: SetEncounterRequest, user_id: str = Depends(verify_clerk_token)):
@@ -1083,10 +1409,40 @@ async def sign_note(req: SignNoteRequest, user_id: str = Depends(verify_clerk_to
     # We'll need a way for the frontend to specify WHICH patient to sign
     pass # Wait, let's refine this to match the override logic
 
+@router.post("/api/triage/generate_soap/{session_id}")
+async def generate_soap_note(session_id: str, req: GenerateSoapRequest, user_id: str = Depends(verify_clerk_token)):
+    try:
+        async with AsyncSessionLocal() as db:
+            note = await CareFlowService.generate_soap_note(db, uuid.UUID(session_id), req.objective_note or "")
+            if not note:
+                raise HTTPException(status_code=404, detail="Session not found or unable to generate SOAP")
+            return note
+    except ValueError as e:
+        print(f"ERROR: [generate_soap_note] Invalid UUID: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid session ID format: {e}")
+    except Exception as e:
+        print(f"ERROR: [generate_soap_note] {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to generate SOAP note: {str(e)}")
+
+
 @router.post("/api/triage/sign_note/{session_id}")
 async def sign_note_v2(session_id: str, req: SignNoteRequest, user_id: str = Depends(verify_clerk_token)):
     async with AsyncSessionLocal() as db:
-        await CareFlowService.sign_note(db, uuid.UUID(session_id), req.assessment_plan)
+        ok = await CareFlowService.sign_note(
+            db,
+            uuid.UUID(session_id),
+            clinical_note=req.assessment_plan or "",
+            soap_note={
+                "subjective": req.subjective or "",
+                "objective": req.objective_note or "",
+                "assessment": req.assessment or "",
+                "plan": req.plan or "",
+            },
+        )
+        if not ok:
+            raise HTTPException(status_code=500, detail="Failed to persist signed SOAP note")
         return {"status": "success"}
 
 @router.post("/api/orchestration/run")
@@ -1095,6 +1451,258 @@ async def run_orchestration(body: dict):
     case_id = body.get("case_id")
     # Logic to fetch data, run triage/analysis, and update redis keys
     return {"status": "initiated", "case_id": case_id}
+
+
+# ---------------------------------------------------------------------------
+# POST /api/triage/register - Register new patient and add to queue
+# ---------------------------------------------------------------------------
+@router.post("/api/triage/register")
+async def register_patient(req: RegisterPatientRequest, user_id: str = Depends(verify_clerk_token)):
+    """Register a new patient and add to queue."""
+    try:
+        uid = user_id.get("sub")
+        h_id = await _get_hospital_id(uid)
+        if not h_id:
+            raise HTTPException(403, "No hospital assigned to profile")
+        
+        async with AsyncSessionLocal() as db:
+            patient = await CareFlowService.register_patient(
+                db, h_id,
+                name=req.name,
+                ic_number=req.ic_number,
+                phone=req.phone,
+                email=req.email,
+                complaint=req.complaint,
+                level=req.level
+            )
+            return {
+                "status": "success",
+                "patient_id": str(patient.id),
+                "name": patient.full_name
+            }
+    except Exception as e:
+        print(f"ERROR: [register_patient] {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to register patient: {str(e)}")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/patients/search - Search patients by name
+# ---------------------------------------------------------------------------
+# @router.get("/api/patients/search")
+# async def search_patients(q: str, user_id: str = Depends(verify_clerk_token)):
+#     """Search existing patients by name."""
+#     try:
+#         uid = user_id.get("sub")
+#         h_id = await _get_hospital_id(uid)
+#         if not h_id:
+#             return {"patients": []}
+        
+#         async with AsyncSessionLocal() as db:
+#             patients = await CareFlowService.search_patients(db, h_id, q)
+#             return {
+#                 "patients": [
+#                     {
+#                         "id": str(p.id),
+#                         "name": p.full_name,
+#                         "ic_number": p.ic_number,
+#                         "phone": p.phone,
+#                         "email": p.email,
+#                         "complaint": p.metadata_data.get("complaint") if p.metadata_data else None,
+#                         "level": p.metadata_data.get("level") if p.metadata_data else 3
+#                     }
+#                     for p in patients
+#                 ]
+#             }
+#     except Exception as e:
+#         print(f"ERROR: [search_patients] {type(e).__name__}: {e}")
+#         return {"patients": []}
+@router.get("/api/patients/search")
+async def search_patients(q: str, user_id: str = Depends(verify_clerk_token)):
+    try:
+        uid = user_id.get("sub")
+        h_id = await _get_hospital_id(uid)
+
+        print("=== SEARCH DEBUG ===")
+        print("USER:", uid)
+        print("HOSPITAL:", h_id)
+        print("QUERY:", q)
+
+        async with AsyncSessionLocal() as db:
+            patients = await CareFlowService.search_patients(db, h_id, q)
+
+            print("FOUND PATIENTS:", len(patients))
+
+            return {
+                "patients": [
+                    {
+                        "id": str(p.id),
+                        "name": p.full_name,   # ✅ match frontend
+                        "ic_number": p.ic_number,
+                        "phone": p.phone,
+                        "email": p.email,
+                        "complaint": p.metadata_data.get("complaint") if p.metadata_data else None,
+                        "level": p.metadata_data.get("level") if p.metadata_data else 3
+                    }
+                    for p in patients
+                ]
+            }
+
+    except Exception as e:
+        print(f"ERROR: [search_patients] {type(e).__name__}: {e}")
+        return {"patients": []}
+
+# ---------------------------------------------------------------------------
+# GET /api/doctors - Get all doctors for hospital
+# ---------------------------------------------------------------------------
+@router.get("/api/doctors")
+async def get_doctors(user_id: str = Depends(verify_clerk_token)):
+    """Get all doctors for the user's hospital."""
+    try:
+        uid = user_id.get("sub")
+        h_id = await _get_hospital_id(uid)
+        if not h_id:
+            return {"doctors": []}
+        
+        async with AsyncSessionLocal() as db:
+            doctors = await CareFlowService.get_doctors_by_hospital(db, h_id)
+            return {
+                "doctors": [
+                    {
+                        "id": str(d.id),
+                        "name": d.full_name,
+                        "department_id": str(d.department_id) if d.department_id else None,
+                        "department_name": d.department.name if d.department else None
+                    }
+                    for d in doctors
+                ]
+            }
+    except Exception as e:
+        print(f"ERROR: [get_doctors] {type(e).__name__}: {e}")
+        return {"doctors": []}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/departments/{dept_id}/doctors - Filter doctors by department
+# ---------------------------------------------------------------------------
+# @router.get("/api/departments/{dept_id}/doctors")
+# async def get_doctors_by_department(dept_id: str, user_id: str = Depends(verify_clerk_token)):
+#     """Get doctors for a specific department."""
+#     try:
+#         async with AsyncSessionLocal() as db:
+#             doctors = await CareFlowService.get_doctors_by_department(db, uuid.UUID(dept_id))
+#             return {
+#                 "doctors": [
+#                     {
+#                         "id": str(d.id),
+#                         "name": d.full_name,
+#                         "department_id": str(d.department_id) if d.department_id else None
+#                     }
+#                     for d in doctors
+#                 ]
+#             }
+#     except Exception as e:
+#         print(f"ERROR: [get_doctors_by_department] {type(e).__name__}: {e}")
+#         return {"doctors": []}
+@router.get("/api/departments/{dept_id}/doctors")
+async def get_doctors_by_department(
+    dept_id: str,
+    user_id: str = Depends(verify_clerk_token)
+):
+    try:
+        async with AsyncSessionLocal() as db:
+            doctors = await CareFlowService.get_doctors_by_department(
+                db, uuid.UUID(dept_id)
+            )
+
+            return {
+                "doctors": [
+                    {
+                        "id": doc["id"],
+                        "full_name": doc["full_name"],
+                        "department_id": doc.get("department_id"),
+                        "room_id": doc.get("room_id")  
+                    }
+                    for doc in doctors
+                ]
+            }
+
+    except Exception as e:
+        print(f"ERROR: {e}")
+        return {"doctors": []}
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/patients/{patient_id}/vitals - Update patient vitals
+# ---------------------------------------------------------------------------
+@router.patch("/api/patients/{patient_id}/vitals")
+async def update_patient_vitals(patient_id: str, req: UpdateVitalsRequest, user_id: str = Depends(verify_clerk_token)):
+    """Update patient vital signs."""
+    try:
+        async with AsyncSessionLocal() as db:
+            success = await CareFlowService.update_patient_vitals(
+                db, uuid.UUID(patient_id),
+                bp=req.blood_pressure,
+                hr=req.heart_rate,
+                o2=req.oxygen_saturation
+            )
+            if not success:
+                raise HTTPException(404, "Patient not found")
+            return {"status": "success"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid patient ID: {e}")
+    except Exception as e:
+        print(f"ERROR: [update_patient_vitals] {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update vitals: {str(e)}")
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/admin/departments/{dept_id} - Delete department
+# ---------------------------------------------------------------------------
+@router.delete("/api/admin/departments/{dept_id}")
+async def delete_department(dept_id: str, user_id: str = Depends(verify_clerk_token)):
+    """Delete a department via REST API."""
+    try:
+        result = await supabase_rest.delete_table("departments", dept_id)
+        if result:
+            return {"status": "success"}
+        raise HTTPException(404, "Department not found")
+    except Exception as e:
+        print(f"ERROR: [delete_department] {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete department: {str(e)}")
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/admin/rooms/{room_id} - Delete room
+# ---------------------------------------------------------------------------
+@router.delete("/api/admin/rooms/{room_id}")
+async def delete_room(room_id: str, user_id: str = Depends(verify_clerk_token)):
+    """Delete a room via REST API."""
+    try:
+        result = await supabase_rest.delete_table("rooms", room_id)
+        if result:
+            return {"status": "success"}
+        raise HTTPException(404, "Room not found")
+    except Exception as e:
+        print(f"ERROR: [delete_room] {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete room: {str(e)}")
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/admin/doctors/{doctor_id} - Delete doctor
+# ---------------------------------------------------------------------------
+@router.delete("/api/admin/doctors/{doctor_id}")
+async def delete_doctor(doctor_id: str, user_id: str = Depends(verify_clerk_token)):
+    """Delete a doctor via REST API."""
+    try:
+        result = await supabase_rest.delete_table("doctors", doctor_id)
+        if result:
+            return {"status": "success"}
+        raise HTTPException(404, "Doctor not found")
+    except Exception as e:
+        print(f"ERROR: [delete_doctor] {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete doctor: {str(e)}")
 
 
 # ---------------------------------------------------------------------------
@@ -1188,7 +1796,7 @@ async def get_active_patients():
                                           c.get("medical_bills", [{}])[0].get("file_url") if c.get("medical_bills") else None),
                           "created_at": c.get("created_at")
                     } 
-                    for c in p.get("medical_cases", [])
+                    for c in (p.get("medical_cases") or [])
                 ]
             }
             
@@ -1223,6 +1831,8 @@ async def get_active_patients():
 
     except Exception as e:
         print(f"[API ERROR] {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
  
 # ─────────────────────────────────────────────
@@ -2177,7 +2787,165 @@ async def get_patient_detail_with_cases(patient_id: str):
         print(f"[PATIENT_DETAIL] ERROR: {e}")
         raise HTTPException(status_code=500, detail=str(e))
  
- 
+#  Get own cases
+async def get_current_patient_id(user: dict = Depends(verify_clerk_token)):
+    clerk_id = user.get("sub")
+
+    res = await supabase_rest.query_table(
+        "patients",
+        {
+            "profile_id": f"eq.{clerk_id}",
+            "select": "id",
+            "limit": 1
+        }
+    )
+
+    if not res:
+        raise HTTPException(404, "Patient not found")
+
+    return res[0]["id"]
+
+async def get_current_staff_id(user: dict = Depends(verify_clerk_token)):
+    clerk_id = user.get("sub")
+
+    res = await supabase_rest.query_table(
+        "doctors",
+        {
+            "profile_id": f"eq.{clerk_id}",
+            "select": "id",
+            "limit": 1
+        }
+    )
+
+    if not res:
+        raise HTTPException(404, "Staff not found")
+
+    return res[0]["id"]
+    
+@router.get("/api/my/cases")
+async def get_my_cases(user=Depends(verify_clerk_token)):
+    clerk_id = user.get("sub")
+    try:
+        print(f"[MY_CASES] Fetching cases for patient {clerk_id}")
+
+        select_query = (
+            "id,full_name,age,category,status,insurers,"
+            "medical_cases!patient_id("
+            "*, "
+            "gl!gl_id(status,file_url, total_amount, rejection_reason), "
+            "claims!claims_id(status,file_url, total_amount, rejection_reason)"
+            ")"
+        )
+
+        response = await supabase_rest.query_table(
+            "patients", {
+                # "select": """id, full_name, age, category, status, insurers,
+                #             medical_cases!patient_id(
+                #                 *,
+                #                 gl:gl!gl_id(status, file_url),
+                #                 claims:claims!claims_id(status, file_url)
+                #             )
+                #             """,
+                # "select": "*", "patient_id": f"eq.{p.get('id')}",
+                # "select": """id, full_name, age, category, status, insurers,
+                #             medical_cases(*)""",
+                "select": select_query,
+                "profile_id": f"eq.{clerk_id}"
+            }
+        )
+        print("[DEBUG] clerk_id:", clerk_id)
+        print("[DEBUG] raw response:", response)
+
+        if not response:
+            raise HTTPException(status_code=404, detail="Patient not found")
+
+        p = response[0]
+        diagnoses = [c["title"] for c in p.get("medical_cases", [])]
+
+        return {
+            "cases": [
+                {
+                    "id": c.get("id"),
+                    "title": c.get("title"),
+                    "department": c.get("department"),
+                    "status": c.get("status"),
+                    "workflow_status": c.get("workflow_status"),
+                    "created_at": c.get("created_at"),
+                    "insurers": p.get("insurers"),
+
+                    "gl": c.get("gl"),
+                    "claim": c.get("claims"),
+                }
+                for c in p.get("medical_cases", [])
+            ],
+            "age": p.get("age"),
+            "diagnoses": diagnoses,
+            "insurers": p.get("insurers"),
+
+        }
+
+    except Exception as e:
+        print(f"[MY_CASES] ERROR: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────
+#  GET /api/patients/archived (incoming from main)
+# ─────────────────────────────────────────────
+# @router.get("/api/patients/archived")
+# async def get_archived_patients():
+#     try:
+#         print("[PATIENTS] Fetching archived patients...")
+
+#         response = await supabase_rest.query_table(
+#             "patients",
+#             {
+#                 "select": "id, full_name, age, category, status, insurers, medical_cases(*)",
+#                 "status": "eq.archived",
+#                 "order": "created_at.desc"
+#             }
+#         )
+
+#         patients = []
+#         for p in response:
+#             cases = [
+#                 {
+#                     "id": c.get("id"),
+#                     "title": c.get("title"),
+#                     "department": c.get("department"),
+#                     "status": c.get("status"),
+#                     "workflow_status": c.get("workflow_status"),
+#                     "rejection_reason": c.get("rejection_reason"),
+#                     "created_at": c.get("created_at")
+#                 }
+#                 for c in (p.get("medical_cases") or [])
+#             ]
+
+#             patients.append({
+#                 "id": p.get("id"),
+#                 "full_name": p.get("full_name"),
+#                 "age": p.get("age"),
+#                 "category": p.get("category"),
+#                 "insurers": p.get("insurers") or [],
+#                 "diagnoses": [c["title"] for c in cases],
+#                 "cases": cases
+#             })
+
+#         print(f"[PATIENTS] Archived success. Count = {len(patients)}")
+
+#         return {
+#             "success": True,
+#             "count": len(patients),
+#             "data": patients
+#         }
+
+#     except Exception as e:
+#         print(f"[PATIENTS] ARCHIVED ERROR: {str(e)}")
+#         raise HTTPException(
+#             status_code=500,
+#             detail={"success": False, "error": str(e)}
+#         )
+        
 # ─────────────────────────────────────────────
 #  GET /api/cases/{case_id}/appointments
 #
@@ -2221,7 +2989,7 @@ async def get_case_timeline(case_id: str):
                     ward,
                     bill_id,
                     case_id,
-                    doctors (
+                    doctors:doctor_id (
                         id,
                         full_name
                     )
@@ -2265,6 +3033,198 @@ async def get_case_timeline(case_id: str):
         print(f"[CASE_TIMELINE] ERROR: {e}")
         raise HTTPException(status_code=500, detail=str(e))
  
+VALID_STATUS = {"none", "requested", "approved", "rejected"}
+
+
+def validate_status(status: str):
+    s = status.lower().strip()
+    if s not in VALID_STATUS:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    return s
+
+# @router.patch("/cases/{case_id}/gl-status")
+# async def update_gl_status(case_id: str, status: str = Query(...)):
+#     status = validate_status(status)
+
+#     res = supabase.table("medical_cases") \
+#         .update({"gl_status": status}) \
+#         .eq("id", case_id) \
+#         .execute()
+
+#     if not res.data:
+#         raise HTTPException(status_code=404, detail="Case not found")
+
+#     return {"success": True, "gl_status": status}
+
+# @router.patch("/cases/{case_id}/claim-status")
+# async def update_claim_status(case_id: str, status: str = Query(...)):
+#     status = validate_status(status)
+
+#     res = supabase.table("medical_cases") \
+#         .update({"claim_status": status}) \
+#         .eq("id", case_id) \
+#         .execute()
+
+#     if not res.data:
+#         raise HTTPException(status_code=404, detail="Case not found")
+
+#     return {"success": True, "claim_status": status}
+
+@router.patch("/cases/{case_id}/status")
+async def update_status(case_id: str, type: str, status: str):
+    status = validate_status(status)
+
+    if type not in ["gl", "claim"]:
+        raise HTTPException(400, "Invalid type")
+
+    # 1. Get related IDs
+    case_res = await supabase_rest.query_table(
+        "medical_cases",
+        {
+            "select": "gl_id, claims_id",
+            "id": f"eq.{case_id}"
+        }
+    )
+
+    if not case_res:
+        raise HTTPException(404, "Case not found")
+
+    case = case_res[0]
+    gl_id = case.get("gl_id")
+    claims_id = case.get("claims_id")
+
+    # 2. Update correct table
+    if type == "gl":
+        if gl_id:
+            await supabase_rest.update_table(
+                "gl",
+                {"status": status},
+                {"id": f"eq.{gl_id}"}
+            )
+
+        else:
+            create = await supabase_rest.update_table(
+                "gl",
+                {
+                    "case_id": case_id,
+                    "status": status
+                },
+                None,
+                method="POST"
+            )
+
+            new_gl_id = create[0]["id"]
+
+            await supabase_rest.update_table(
+                "medical_cases",
+                {"gl_id": new_gl_id},
+                {"id": f"eq.{case_id}"}
+            )
+
+@router.delete("/cases/{case_id}/status")
+async def withdraw_gl(case_id: str, patient_id: str = Depends(get_current_patient_id)):
+    # 1. get GL id
+    res = await supabase_rest.query_table(
+        "medical_cases",
+        {
+            "select": "gl_id",
+            "id": f"eq.{case_id}",
+            "patient_id": f"eq.{patient_id}"
+        }
+    )
+
+    if not res or not res[0].get("gl_id"):
+        return {"message": "No GL record to withdraw"}
+
+    gl_id = res[0]["gl_id"]
+
+    # 2. unlink from medical_cases
+    await supabase_rest.update_table(
+        "medical_cases",
+        {"gl_id": None},
+        {"id": f"eq.{case_id}"}
+    )
+
+    # 3. delete GL row
+    await supabase_rest.delete_table(
+        "gl",
+        {"id": f"eq.{gl_id}"}
+    )
+
+    return {"status": "none", "message": "GL record withdrawn successfully"}
+
+# ---------------------------------------------------------------------------
+# GET /me/role  — returns the current user's role from profiles table
+# ---------------------------------------------------------------------------
+@router.get("/me/role")
+async def get_my_role(user: dict = Depends(verify_clerk_token)):
+    clerk_id = user.get("sub")
+ 
+    res = await supabase_rest.query_table(
+        "profiles",
+        {
+            "select": "role",
+            "id": f"eq.{clerk_id}"   # profiles.id = Clerk sub
+        }
+    )
+ 
+    if not res:
+        raise HTTPException(404, "Profile not found")
+ 
+    return {"role": res[0].get("role")}
+ 
+ 
+# ---------------------------------------------------------------------------
+# PATCH /cases/{case_id}/reject  — hospital staff rejects GL or Claim
+# Sets status=rejected and writes rejection_reason
+# ---------------------------------------------------------------------------
+@router.patch("/cases/{case_id}/reject")
+async def reject_status(
+    case_id: str,
+    type: str,
+    reason: str,
+    user: dict = Depends(verify_clerk_token),
+):
+    if type not in ["gl", "claim"]:
+        raise HTTPException(400, "Invalid type. Must be 'gl' or 'claim'")
+ 
+    # 1. Get FK ids from medical_cases
+    case_res = await supabase_rest.query_table(
+        "medical_cases",
+        {
+            "select": "gl_id,claims_id",
+            "id": f"eq.{case_id}"
+        }
+    )
+ 
+    if not case_res:
+        raise HTTPException(404, "Case not found")
+ 
+    case = case_res[0]
+ 
+    if type == "gl":
+        record_id = case.get("gl_id")
+        if not record_id:
+            raise HTTPException(404, "No GL record found for this case")
+ 
+        await supabase_rest.update_table(
+            "gl",
+            {"status": "rejected", "rejection_reason": reason},
+            {"id": f"eq.{record_id}"}
+        )
+        return {"status": "rejected", "message": "GL rejected"}
+ 
+    else:  # claim
+        record_id = case.get("claims_id")
+        if not record_id:
+            raise HTTPException(404, "No Claim record found for this case")
+ 
+        await supabase_rest.update_table(
+            "claims",
+            {"status": "rejected", "rejection_reason": reason},
+            {"id": f"eq.{record_id}"}
+        )
+        return {"status": "rejected", "message": "Claim rejected"}
  
 # ─────────────────────────────────────────────
 #  GET /api/patients/archived

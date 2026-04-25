@@ -1,22 +1,41 @@
+import asyncio
+import time
+import re
 from typing import List, Dict
-from sqlalchemy import select
+from sqlalchemy import select, text as sa_text
 from app.models.db import AsyncSessionLocal, MedicalKBEmbedding
 from app.config.settings import settings
 from app.config.llm_provider import llm
 from app.services.agents.clinical_agents import ExtractorAgent, StrategistAgent, CriticAgent
 
 
+
 class TriageOrchestrator:
     """The Multi-Agent Orchestrator (Sparse Context Pattern)"""
     
-    async def _get_rag_context(self, symptoms: List[str]) -> str:
-        """Fetch clinical context using clean symptoms (High Relevance)."""
-        if not symptoms:
+    async def _fetch_all_live_depts(self) -> List[str]:
+        """Fetch all unique departments currently available across the network."""
+        try:
+            async with AsyncSessionLocal() as db:
+                stmt = sa_text("SELECT distinct(name) FROM departments ORDER BY name ASC")
+                res = await db.execute(stmt)
+                return [r[0] for r in res.fetchall()]
+        except Exception as e:
+            print(f"DEBUG: [DB] Pre-fetch departments failed: {e}")
+            return []
+
+    async def _get_rag_context(self, symptoms: List[str] = None, precomputed_vector: List[float] = None) -> str:
+
+        """Fetch clinical context using clean symptoms or a precomputed vector (High Relevance)."""
+        if not symptoms and not precomputed_vector:
             return "No specific guidelines available."
             
         try:
-            search_query = ", ".join(symptoms)
-            vector = await llm.embed(search_query)
+            if precomputed_vector:
+                vector = precomputed_vector
+            else:
+                search_query = ", ".join(symptoms)
+                vector = await llm.embed(search_query)
             
             async with AsyncSessionLocal() as db:
                 stmt = select(MedicalKBEmbedding.content).order_by(
@@ -26,74 +45,67 @@ class TriageOrchestrator:
                 chunks = res.scalars().all()
                 
                 if chunks:
-                    print(f"DEBUG: [RAG] Success! {len(chunks)} clinical guideline chunks retrieved for: {symptoms}")
+                    source_desc = symptoms if symptoms else "raw intent"
+                    print(f"DEBUG: [RAG] Success! {len(chunks)} clinical guideline chunks retrieved for: {source_desc}")
                     return "\n---\n".join(chunks)
                 else:
-                    print(f"DEBUG: [RAG] No relevant guidelines found for: {symptoms}")
                     return "No specific guidelines available."
         except Exception as e:
             print(f"DEBUG: [RAG] Retrieval Failed: {e}")
             return "NOTE: Official guidelines currently unavailable. Triage proceeding based on AI base knowledge."
 
 
-    async def run_pipeline(self, user_text: str, language_preference: str = "auto"):
+
+    async def run_pipeline(self, user_text: str, language_preference: str = "auto", history: List[Dict] = None):
+        t_start = time.time()
         print(f"DEBUG: Starting Global-to-Local Pipeline for: {user_text[:30]}...")
-        from app.utils.supabase_client import supabase_rest
-        from sqlalchemy import text as sa_text
         
-        # Phase 1: Extraction (Gemini Flash-Lite)
+        # Phase 1: Tier-1 Parallel Tasking (Concurrent Data Gathering)
         # ----------------------------------------------------
-        extraction = await ExtractorAgent.process(user_text, language_preference=language_preference)
+        # We start Extraction, Vectorization, and DB Inventory at the exact same moment.
+        print("DEBUG: [Latency] Starting Tier-1 Concurrent Tasks (Extraction + RAG + DB)...")
+        
+        task_extr = ExtractorAgent.process(user_text, history=history, language_preference=language_preference)
+        task_vector = llm.embed(user_text)
+        task_depts = self._fetch_all_live_depts()
+        
+        extraction, vector, live_depts_all = await asyncio.gather(task_extr, task_vector, task_depts)
+
+        
+        t_tier1 = time.time() - t_start
+        print(f"DEBUG: [Latency] Tier-1 Completed in {t_tier1:.2f}s")
+        
         symptoms = extraction.get("symptoms", [])
         print(f"DEBUG: Agent 1 (Extraction) found: {symptoms}")
 
-        # Phase 2: RAG Retrieval (Targeted)
+        # Phase 2: RAG Context Retrieval (Instant since vector is ready)
         # ----------------------------------------------------
-        print(f"DEBUG: [Stage 2] Searching RAG Guidelines for: {symptoms}")
-        clinical_context = await self._get_rag_context(symptoms)
+        clinical_context = await self._get_rag_context(precomputed_vector=vector)
 
-        # Phase 3: Ideal Specialty Discovery (Global List)
+        # Phase 3: Multi-Agent Clinical Triage (Direct pass with constraints)
         # ----------------------------------------------------
-        # We pass None for valid_departments to trigger the GLOBAL_DEPARTMENTS default
-        decision = await StrategistAgent.process(extraction, clinical_context, language_preference=language_preference)
-        ideal_specialist = decision.get("specialist")
-        print(f"DEBUG: [Stage 3] Ideal Discovery -> Specialist: {ideal_specialist}")
-        print(f"DEBUG: [Stage 3] Strategist Reasoning:\n{'-'*40}\n{decision.get('reasoning')}\n{'-'*40}")
+        # We pass the live_depts_all list directly into the first Strategist call.
+        # This removes the "Ideal then Verify" double-wait, saving ~40 seconds.
+        live_depts = live_depts_all if live_depts_all else ["General Medicine", "Emergency Department"]
+        
+        print(f"DEBUG: [Stage 3] Strategist analysis (Constraint-Aware) for {len(live_depts)} departments...")
+        
+        decision = await StrategistAgent.process(
+            extraction, 
+            clinical_context, 
+            valid_departments=live_depts,
+            language_preference=language_preference,
+            history=history
+        )
+        
+        t_strat = time.time() - t_start
+        print(f"DEBUG: [Latency] Tier-2 (Strategist) Completed in {t_strat:.2f}s")
+        print(f"DEBUG: [Stage 3] Strategist Reasoning:\n{decision.get('reasoning')}")
+        print(f"DEBUG: [Stage 3] Strategist Result -> Specialist: {decision.get('specialist')}")
 
-        # Phase 4: Live Verification (Existence Check)
-        # ----------------------------------------------------
-        live_depts = None
-        async with AsyncSessionLocal() as db:
-            # Check if this specialist (or similar) exists in ANY hospital
-            stmt = sa_text("SELECT COUNT(*) FROM departments WHERE name ILIKE :name")
-            res = await db.execute(stmt, {"name": f"%{ideal_specialist}%"})
-            count = res.scalar()
-            
-            if count == 0:
-                print(f"WARNING: [Stage 4] Ideal specialty '{ideal_specialist}' not found in live database.")
-                print("DEBUG: [Stage 4] Fetching all distinct live departments for fallback...")
-                
-                # Fetch all distinct departments currently in the system
-                live_res = await db.execute(sa_text("SELECT distinct(name) FROM departments ORDER BY name ASC"))
-                live_depts = [r[0] for r in live_res.fetchall()]
-                
-                if not live_depts:
-                    live_depts = ["General Medicine", "Emergency Department"] # Safety floor
-                
-                print(f"DEBUG: [Stage 4] Live Fallback Mode Triggered. Choose from: {live_depts}")
-                
-                # Re-audit with the live list
-                decision = await StrategistAgent.process(
-                    extraction, 
-                    clinical_context, 
-                    valid_departments=live_depts,
-                    is_fallback_mode=True
-                    ,language_preference=language_preference
-                )
-                print(f"DEBUG: [Stage 4] Live Pivot Result -> Specialist: {decision.get('specialist')}")
-                print(f"DEBUG: [Stage 4] Fallback Reasoning:\n{'-'*40}\n{decision.get('reasoning')}\n{'-'*40}")
-            else:
-                print(f"DEBUG: [Stage 4] Live Match Confirmed ({count} facilities found).")
+
+        specialist_match = True # Always True now since we force-constrained the list
+
 
         # Phase 5 & 6: Adversarial Consensus Debate (Gemini vs. Groq)
         # ----------------------------------------------------
@@ -130,8 +142,10 @@ class TriageOrchestrator:
                 valid_departments=live_depts, 
                 is_fallback_mode=(live_depts is not None),
                 debate_history=debate_history,
-                language_preference=language_preference
+                language_preference=language_preference,
+                history=history
             )
+
             is_re_audited = True
             print(f"DEBUG: [Strategist Reasoning]\n{decision.get('reasoning')}")
             print(f"DEBUG: [Consensus Round {round_count}] Strategist Result -> {decision.get('urgency')} {decision.get('specialist')}")
@@ -143,6 +157,8 @@ class TriageOrchestrator:
             if revised:
                 decision = revised
         
+        t_total = time.time() - t_start
+        print(f"DEBUG: [Latency] TOTAL PIPELINE COMPLETED in {t_total:.2f}s")
         print(f"\n[TRIAGE COMPLETE] Final Outcome: {decision.get('urgency')} {decision.get('specialist')}")
 
 
@@ -152,7 +168,7 @@ class TriageOrchestrator:
             "extraction": extraction,
             "decision": decision,
             "critique": final_audit.get("critique") if final_audit else "No audit performed",
-            "is_fallback": count == 0,
+            "is_fallback": not specialist_match,
             "is_re_audited": is_re_audited
         }
 

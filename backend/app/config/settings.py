@@ -20,9 +20,10 @@ class Settings(BaseSettings):
     DATABASE_URL_DIRECT: str
 
     # LLM Provider
-    LLM_PROVIDER: Literal["gemini", "zhipu"] = "gemini"
+    LLM_PROVIDER: Literal["gemini", "zhipu", "openai", "groq"] = "gemini"
     GEMINI_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
+    OPENAI_API_BASE: str = ""
     ZHIPU_API_KEY: str = ""
     MODEL_NAME: str = "models/gemini-3.1-flash-lite-preview"
     

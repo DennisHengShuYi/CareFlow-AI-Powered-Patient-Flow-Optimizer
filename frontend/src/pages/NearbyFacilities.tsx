@@ -3,7 +3,8 @@ import { useAuth } from '@clerk/clerk-react';
 import { MapContainer, Marker, Popup, TileLayer, Circle, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { MapPinned, Loader2, Navigation2, Phone, LocateFixed, ListChecks } from 'lucide-react';
+import { MapPinned, Loader2, Navigation2, Phone, LocateFixed, ListChecks, Sparkles } from 'lucide-react';
+
 import LayoutSidebar from '../components/LayoutSidebar';
 import { useProfile } from '../hooks/useProfile';
 import { useNavigate } from 'react-router-dom';
@@ -103,6 +104,8 @@ export default function NearbyFacilities() {
   const [geoError, setGeoError] = useState<string | null>(null);
   const [userCoords, setUserCoords] = useState<UserCoords | null>(null);
   const [facilities, setFacilities] = useState<NearbyFacility[]>([]);
+  const [allDepartments, setAllDepartments] = useState<string[]>([]);
+  const [selectedDept, setSelectedDept] = useState<string>('');
   const [selectedFacilityId, setSelectedFacilityId] = useState<string | null>(null);
   const [showMap, setShowMap] = useState(false);
 
@@ -126,11 +129,35 @@ export default function NearbyFacilities() {
     });
   };
 
+  // 1. Fetch ALL possible departments for the dropdown on mount
+  useEffect(() => {
+    const fetchDepts = async () => {
+      try {
+        const token = await getToken();
+        const res = await fetch(`${API}/api/departments/all`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setAllDepartments(data.departments || []);
+        }
+      } catch (err) {
+        console.error('Failed to load departments list:', err);
+      }
+    };
+    fetchDepts();
+  }, [getToken]);
+
   useEffect(() => {
     const cached = sessionStorage.getItem('latestTriageContext');
     if (cached) {
       try {
-        setTriageContext(JSON.parse(cached));
+        const ctx = JSON.parse(cached);
+        setTriageContext(ctx);
+        // Default filter to triage recommendation if it exists
+        if (ctx.recommended_specialist) {
+           setSelectedDept(ctx.recommended_specialist);
+        }
       } catch {
         sessionStorage.removeItem('latestTriageContext');
       }
@@ -149,6 +176,10 @@ export default function NearbyFacilities() {
         try {
           setLoadingFacilities(true);
           const token = await getToken();
+          // The search string uses selectedDept if manual override is set, 
+          // otherwise falls back to triageContext, otherwise empty (Show All)
+          const searchSpecialist = selectedDept || '';
+
           const res = await fetch(`${API}/api/hospitals/nearby`, {
             method: 'POST',
             headers: {
@@ -159,8 +190,8 @@ export default function NearbyFacilities() {
               latitude: coords?.lat ?? null,
               longitude: coords?.lng ?? null,
               location: profile?.location || '',
-              specialist: triageContext?.recommended_specialist || '',
-              limit: 12,
+              specialist: searchSpecialist,
+              limit: 20,
             }),
           });
 
@@ -230,7 +261,8 @@ export default function NearbyFacilities() {
     return () => {
       cancelled = true;
     };
-  }, [getToken, profile?.location, triageContext?.recommended_specialist]);
+  }, [getToken, profile?.location, selectedDept]);
+
 
   const mapCenter = useMemo<[number, number]>(() => {
     if (userCoords) return [userCoords.lat, userCoords.lng];
@@ -252,17 +284,63 @@ export default function NearbyFacilities() {
               Hospitals and clinics near your current location. Use the list below as the primary booking path.
             </p>
           </div>
-          <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
-            {triageContext ? (
-              <div style={{ background: '#e8f5e9', border: '1px solid #a5d6a7', color: '#1b5e20', borderRadius: '12px', padding: '0.65rem 0.9rem', fontWeight: 700 }}>
-                Booking filtered by {triageContext.recommended_specialist}
+          <div style={{ display: 'flex', gap: '0.8rem', flexWrap: 'wrap', alignItems: 'center' }}>
+            <div style={{ position: 'relative', minWidth: '220px' }}>
+              <select
+                value={selectedDept}
+                onChange={(e) => setSelectedDept(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '0.65rem 1rem',
+                  borderRadius: '12px',
+                  border: '1px solid var(--neutral-400)',
+                  background: 'rgba(255,255,255,0.8)',
+                  backdropFilter: 'blur(10px)',
+                  fontWeight: 700,
+                  fontSize: '0.9rem',
+                  appearance: 'none',
+                  cursor: 'pointer',
+                  color: 'var(--text-main)',
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.03)'
+                }}
+              >
+                <option value="">All Departments</option>
+                {allDepartments.map(dept => (
+                  <option key={dept} value={dept}>{dept}</option>
+                ))}
+              </select>
+              <div style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-muted)' }}>
+                <Navigation2 size={14} style={{ transform: 'rotate(180deg)' }} />
               </div>
-            ) : (
-              <div style={{ background: '#fff8e1', border: '1px solid #ffe082', color: '#8a6d00', borderRadius: '12px', padding: '0.65rem 0.9rem', fontWeight: 700 }}>
-                Complete intake first to unlock specialty-based booking
-              </div>
-            )}
+            </div>
+
+            <div 
+              onClick={() => triageContext && setSelectedDept(triageContext.recommended_specialist)}
+              style={{ 
+                background: triageContext ? '#e8f5e9' : 'var(--neutral-100)', 
+                border: triageContext ? '1px solid #c8e6c9' : '1px solid var(--neutral-300)', 
+                color: triageContext ? '#1b5e20' : 'var(--text-muted)', 
+                borderRadius: '12px', 
+                padding: '0.65rem 0.9rem', 
+                fontWeight: 700, 
+                fontSize: '0.85rem', 
+                cursor: triageContext ? 'pointer' : 'default',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                transition: 'all 0.2s ease',
+                opacity: triageContext ? 1 : 0.7
+              }}
+            >
+              <Sparkles size={14} style={{ color: triageContext ? '#43a047' : 'var(--text-muted)' }} />
+              {triageContext ? `AI Suggestion: ${triageContext.recommended_specialist}` : 'No current suggestion'}
+              {triageContext && selectedDept !== triageContext.recommended_specialist && (
+                <span style={{ fontSize: '0.7rem', textTransform: 'uppercase', background: 'rgba(27,94,32,0.1)', padding: '2px 6px', borderRadius: '4px', marginLeft: '4px' }}>Reset</span>
+              )}
+            </div>
+
           </div>
+
         </div>
 
         {(error || geoError) && (
@@ -365,17 +443,27 @@ export default function NearbyFacilities() {
                       </div>
 
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
-                        {facility.matched_departments.slice(0, 4).map((dept) => (
-                          <span key={dept} style={{ background: '#e8f5e9', color: '#1b5e20', padding: '0.25rem 0.5rem', borderRadius: '999px', fontSize: '0.75rem' }}>
-                            {dept}
-                          </span>
-                        ))}
-                        {!facility.matched_departments.length && facility.all_departments.slice(0, 4).map((dept) => (
-                          <span key={dept} style={{ background: 'var(--neutral-200)', color: 'var(--text-muted)', padding: '0.25rem 0.5rem', borderRadius: '999px', fontSize: '0.75rem' }}>
-                            {dept}
-                          </span>
-                        ))}
+                        {facility.all_departments.map((dept) => {
+                          const isMatch = selectedDept && (dept.toLowerCase().includes(selectedDept.toLowerCase()) || selectedDept.toLowerCase().includes(dept.toLowerCase()));
+                          return (
+                            <span 
+                              key={dept} 
+                              style={{ 
+                                background: isMatch ? '#e8f5e9' : 'var(--neutral-100)', 
+                                color: isMatch ? '#1b5e20' : 'var(--text-muted)', 
+                                border: isMatch ? '1px solid #c8e6c9' : '1px solid var(--neutral-300)',
+                                padding: '0.25rem 0.65rem', 
+                                borderRadius: '999px', 
+                                fontSize: '0.75rem',
+                                fontWeight: isMatch ? 700 : 500
+                              }}
+                            >
+                              {dept}
+                            </span>
+                          );
+                        })}
                       </div>
+
                     </div>
                   );
                 })}

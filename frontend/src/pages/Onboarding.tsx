@@ -45,12 +45,29 @@ export default function Onboarding() {
 
       // If creating a new hospital
       if (formData.role === 'hospital_staff' && isCreatingHospital && newHospitalName) {
+        // Fetch coordinates from address
+        let latitude = null;
+        let longitude = null;
+        try {
+          const { getCoordinates } = await import('../lib/geocoding');
+          const coords = await getCoordinates(newHospitalAddress);
+          if (coords) {
+            latitude = coords.lat;
+            longitude = coords.lng;
+            console.log(`DEBUG: Geocoding success: ${latitude}, ${longitude} (Approx: ${coords.isApproximate})`);
+          }
+        } catch (geoErr) {
+          console.error('Geocoding service unavailable:', geoErr);
+        }
+
         const { data: newHosp, error: hospErr } = await supabase
           .from('hospitals')
           .insert({ 
             name: newHospitalName, 
             address: newHospitalAddress || null,
             contact_number: newHospitalContact || null,
+            latitude,
+            longitude,
             is_active: true 
           })
           .select()
@@ -58,6 +75,7 @@ export default function Onboarding() {
         if (hospErr) throw hospErr;
         finalHospitalId = newHosp.id;
       }
+
 
       const { error } = await supabase
         .from('profiles')
