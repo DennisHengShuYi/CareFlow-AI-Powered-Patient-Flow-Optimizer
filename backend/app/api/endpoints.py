@@ -581,7 +581,7 @@ async def intake_voice(
     print(f"DEBUG: [Voice] Processing audio: {file.filename} ({len(contents)} bytes)")
     try:
         result = await intake_pipeline.process_voice(contents)
-        print(f"DEBUG: [Voice] Transcription successful: {result.extracted[:100]}...")
+        print(f"DEBUG: [Voice] Transcription successful: {result.content[:100]}...")
         latency = int((time.time() - t0) * 1000)
         await _audit("voice", "/intake/voice", file.filename or "audio", latency, 200)
         return result.model_dump()
@@ -607,7 +607,7 @@ async def intake_document(
     print(f"DEBUG: [Doc] Processing document: {file.filename} (MIME: {mime}, {len(contents)} bytes)")
     try:
         result = await intake_pipeline.process_document(contents, mime)
-        print(f"DEBUG: [Doc] Extraction successful: {result.extracted if hasattr(result, 'extracted') else 'Content extracted'}")
+        print("DEBUG: [Doc] Extraction successful: Content extracted")
         latency = int((time.time() - t0) * 1000)
         await _audit("doc", "/intake/document", file.filename or "document", latency, 200)
         return result.model_dump()
