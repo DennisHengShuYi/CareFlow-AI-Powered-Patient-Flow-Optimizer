@@ -21,3 +21,4 @@ python-multipart==0.0.12
 supabase
 openai==1.45.0
 reportlab==4.0.10
+pypdf==4.1.0
