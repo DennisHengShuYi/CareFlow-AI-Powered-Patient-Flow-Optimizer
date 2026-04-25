@@ -122,7 +122,8 @@ class CareFlowService:
                 "type": "walk-in",
                 "triage_result": triage_res,
                 "metadata_data": metadata,
-                "ai_reasoning": triage_res.get("reasoning")
+                "ai_reasoning": triage_res.get("reasoning"),
+                "raw_time": created_at
             })
 
         # Process Appointments
@@ -145,6 +146,9 @@ class CareFlowService:
                 try: time_str = datetime.fromisoformat(scheduled_at.replace("Z", "+00:00")).strftime("%H:%M")
                 except: pass
 
+            metadata = dict(p.get("metadata_data", {}) or {})
+            metadata["complaint"] = a.get("chief_complaint")
+
             patient_list.append({
                 "id": str(a["id"]),
                 "patient_id": str(p.get("id", "")),
@@ -160,9 +164,10 @@ class CareFlowService:
                 "status": "Awaiting Arrival",
                 "is_active": False,
                 "type": "appointment",
-                "triage_result": {},
-                "metadata_data": {"complaint": a.get("chief_complaint")},
-                "ai_reasoning": None
+                "triage_result": a.get("triage_result") or {},
+                "metadata_data": metadata,
+                "ai_reasoning": (a.get("triage_result") or {}).get("reasoning"),
+                "raw_time": scheduled_at
             })
 
         # Final sorting: Urgency first (P1 top), then Arrival/Appt time
@@ -393,10 +398,22 @@ class CareFlowService:
                 
             metadata = patient_records[0].get("metadata_data") or {}
             
-            # Update vitals
-            if "blood_pressure" in vitals: metadata["blood_pressure"] = vitals["blood_pressure"]
-            if "heart_rate" in vitals: metadata["heart_rate"] = vitals["heart_rate"]
-            if "oxygen_saturation" in vitals: metadata["oxygen_saturation"] = vitals["oxygen_saturation"]
+            # Sanitize: ensure vitals are always stored as strings, never nested objects
+            def _safe_str(v):
+                if isinstance(v, dict):
+                    # unwrap if accidentally a dict
+                    return str(next(iter(v.values()), ""))
+                return str(v) if v is not None else ""
+            
+            # Also flatten any existing bad data in the stored metadata before merging
+            for k in ["blood_pressure", "heart_rate", "oxygen_saturation"]:
+                if isinstance(metadata.get(k), dict):
+                    metadata[k] = _safe_str(metadata[k])
+            
+            # Merge new vitals
+            if "blood_pressure" in vitals: metadata["blood_pressure"] = _safe_str(vitals["blood_pressure"])
+            if "heart_rate" in vitals: metadata["heart_rate"] = _safe_str(vitals["heart_rate"])
+            if "oxygen_saturation" in vitals: metadata["oxygen_saturation"] = _safe_str(vitals["oxygen_saturation"])
             
             result = await supabase_rest.update_table("patients", {"metadata_data": metadata}, str(patient_id))
             return result is not None
@@ -416,6 +433,27 @@ class CareFlowService:
                 }
             )
             if not session_records:
+                # Check if it's an appointment
+                appt_records = await supabase_rest.query_table("appointments", {"id": f"eq.{session_id}", "select": "*"})
+                if appt_records:
+                    # Update status to In Consult and return existing assignment
+                    await supabase_rest.update_table("appointments", {"status": "In Consult"}, str(session_id))
+                    a = appt_records[0]
+                    dept_name = "Scheduled"
+                    doc_name = "Unassigned"
+                    if a.get("doctor_id"):
+                        doc_res = await supabase_rest.query_table("doctors", {"id": f"eq.{a['doctor_id']}", "select": "full_name"})
+                        if doc_res: doc_name = doc_res[0].get("full_name", doc_name)
+                    if a.get("department_id"):
+                        dept_res = await supabase_rest.query_table("departments", {"id": f"eq.{a['department_id']}", "select": "name"})
+                        if dept_res: dept_name = dept_res[0].get("name", dept_name)
+                    return {
+                        "department_name": dept_name,
+                        "doctor_name": doc_name,
+                        "department_id": a.get("department_id"),
+                        "doctor_id": a.get("doctor_id"),
+                        "reasoning": "Pre-scheduled appointment."
+                    }
                 return None
 
             session_data = session_records[0]
@@ -548,6 +586,37 @@ class CareFlowService:
                 chosen_doctor = doctor_list[0]
 
             print(f"DEBUG: [auto_assign_patient] chosen_department={chosen_department}, chosen_doctor={chosen_doctor}, reasoning={reasoning}")
+
+            # Room Eviction Logic
+            if chosen_doctor and chosen_doctor.get("id"):
+                new_doc_id = str(chosen_doctor["id"])
+                # Evict from sessions
+                evict_sessions = await supabase_rest.query_table(
+                    "sessions",
+                    {
+                        "doctor_id": f"eq.{new_doc_id}",
+                        "status": "eq.In Consult",
+                        "id": f"neq.{session_id}",
+                        "select": "id"
+                    }
+                )
+                for s in evict_sessions:
+                    print(f"DEBUG: [auto_assign_patient] Evicting session {s['id']} from doctor {new_doc_id}")
+                    await supabase_rest.update_table("sessions", {"status": "Waiting for Doctor"}, str(s['id']))
+                
+                # Evict from appointments
+                evict_appts = await supabase_rest.query_table(
+                    "appointments",
+                    {
+                        "doctor_id": f"eq.{new_doc_id}",
+                        "status": "eq.In Consult",
+                        "id": f"neq.{session_id}",
+                        "select": "id"
+                    }
+                )
+                for a in evict_appts:
+                    print(f"DEBUG: [auto_assign_patient] Evicting appointment {a['id']} from doctor {new_doc_id}")
+                    await supabase_rest.update_table("appointments", {"status": "Waiting for Doctor"}, str(a['id']))
 
             update_data = {"status": "In Consult"}
             if chosen_department and chosen_department.get("id") is not None:
@@ -722,31 +791,31 @@ class CareFlowService:
     async def sign_note(db: AsyncSession, session_id: uuid.UUID, clinical_note: str | None = None, soap_note: dict | None = None):
         """Sign off an encounter and move it to history."""
         try:
-            session_data = await supabase_rest.query_table(
-                "sessions",
-                {
-                    "id": f"eq.{session_id}",
-                    "select": "triage_result"
-                }
-            )
-            existing_triage = {}
-            if session_data and isinstance(session_data, list) and len(session_data) > 0:
-                existing_triage = session_data[0].get("triage_result") or {}
-
             payload = {}
             if clinical_note is not None:
                 payload["clinical_note"] = clinical_note
             if soap_note:
                 payload["soap_note"] = soap_note
 
-            merged_triage = {**existing_triage, **payload}
-            update_data = {
-                "status": "signed",
-                "triage_result": merged_triage,
-            }
+            # Check sessions first
+            is_session = await supabase_rest.query_table("sessions", {"id": f"eq.{session_id}", "select": "id,triage_result"})
+            if is_session:
+                existing_triage = is_session[0].get("triage_result") or {}
+                merged_triage = {**existing_triage, **payload}
+                update_data = {"status": "signed", "triage_result": merged_triage}
+                result = await supabase_rest.update_table("sessions", update_data, str(session_id))
+                return result is not None
 
-            result = await supabase_rest.update_table("sessions", update_data, str(session_id))
-            return result is not None
+            # Check appointments
+            is_appt = await supabase_rest.query_table("appointments", {"id": f"eq.{session_id}", "select": "id,triage_result"})
+            if is_appt:
+                existing_triage = is_appt[0].get("triage_result") or {}
+                merged_triage = {**existing_triage, **payload}
+                update_data = {"status": "signed", "triage_result": merged_triage}
+                result = await supabase_rest.update_table("appointments", update_data, str(session_id))
+                return result is not None
+
+            return False
         except Exception as e:
             print(f"ERROR in sign_note: {e}")
             return False
@@ -754,41 +823,60 @@ class CareFlowService:
     @staticmethod
     async def generate_soap_note(db: AsyncSession, session_id: uuid.UUID, objective_note: str = ""):
         """Generate a SOAP note draft from the encounter using the configured LLM."""
-        session_data = await supabase_rest.query_table(
-            "sessions",
-            {
-                "id": f"eq.{session_id}",
-                "select": "*,patients(*),doctors(full_name),departments(name)"
-            }
-        )
+        # Check sessions first
+        session_data = await supabase_rest.query_table("sessions", {"id": f"eq.{session_id}"})
+        is_appt = False
         if not session_data:
-            return None
+            # Check appointments
+            session_data = await supabase_rest.query_table("appointments", {"id": f"eq.{session_id}"})
+            is_appt = True
+            if not session_data:
+                return None
 
         session = session_data[0]
-        patient_info = session.get("patients")
-        if isinstance(patient_info, list) and patient_info:
-            patient = patient_info[0]
-        else:
-            patient = patient_info or {}
+        
+        # Fetch Patient separately
+        patient = {}
+        patient_id = session.get("patient_id")
+        if patient_id:
+            patient_res = await supabase_rest.query_table("patients", {"id": f"eq.{patient_id}"})
+            if patient_res: patient = patient_res[0]
 
-        doctor_info = session.get("doctors")
-        if isinstance(doctor_info, list) and doctor_info:
-            doctor_name = doctor_info[0].get("full_name", "Unassigned")
-        elif isinstance(doctor_info, dict):
-            doctor_name = doctor_info.get("full_name", "Unassigned")
-        else:
-            doctor_name = "Unassigned"
+        # Fetch Doctor separately
+        doctor_name = "Unassigned"
+        doctor_id = session.get("doctor_id")
+        doctor = {}
+        if doctor_id:
+            doc_res = await supabase_rest.query_table("doctors", {"id": f"eq.{doctor_id}"})
+            if doc_res: 
+                doctor = doc_res[0]
+                doctor_name = doctor.get("full_name", "Unassigned")
 
-        department_info = session.get("departments")
-        if isinstance(department_info, list) and department_info:
-            department_name = department_info[0].get("name", "Triage")
-        elif isinstance(department_info, dict):
-            department_name = department_info.get("name", "Triage")
-        else:
-            department_name = "Triage"
+        # Fetch Department separately
+        department_name = "Triage"
+        dept_id = session.get("department_id")
+        if not dept_id and doctor:
+            dept_id = doctor.get("department_id")
+        
+        if dept_id:
+            dept_res = await supabase_rest.query_table("departments", {"id": f"eq.{dept_id}"})
+            if dept_res: department_name = dept_res[0].get("name", "Triage")
 
         metadata = (patient.get("metadata_data") or {})
-        complaint = metadata.get("complaint") or session.get("triage_result", {}).get("summary", "No complaint provided")
+        
+        # Try to find the complaint in various places
+        complaint = metadata.get("complaint")
+        if not complaint:
+            # Check triage_result (walk-ins)
+            triage_res = session.get("triage_result", {}) or {}
+            complaint = triage_res.get("summary")
+        if not complaint:
+            # Check chief_complaint (appointments)
+            complaint = session.get("chief_complaint")
+        
+        if not complaint:
+            complaint = "No complaint provided"
+
         vitals = {
             "blood_pressure": metadata.get("blood_pressure", "N/A"),
             "heart_rate": metadata.get("heart_rate", "N/A"),

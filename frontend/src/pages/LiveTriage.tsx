@@ -864,17 +864,33 @@ export default function LiveTriage() {
     Math.round((data.queue_active / effectiveClinicCapacity) * 100),
   );
 
-  const chartData =
-    utilizationHistory.length > 0
-      ? utilizationHistory
-      : [
-          { time: "08:00", utilization: 45 },
-          { time: "10:00", utilization: 85 },
-          { time: "12:00", utilization: 60 },
-          { time: "14:00", utilization: 92 },
-          { time: "16:00", utilization: 75 },
-          { time: "Now", utilization: currentUtilization },
-        ];
+  // Calculate Intake Profile (Patients arriving per hour)
+  const intakeCounts = new Map<string, number>();
+  (data.patients || []).forEach((p: any) => {
+    if (p.raw_time) {
+      const date = new Date(p.raw_time);
+      if (!isNaN(date.getTime())) {
+        const hour = date.getHours();
+        const hourStr = `${hour.toString().padStart(2, '0')}:00`;
+        intakeCounts.set(hourStr, (intakeCounts.get(hourStr) || 0) + 1);
+      }
+    }
+  });
+
+  const chartData = Array.from(intakeCounts.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([time, count]) => ({
+      time,
+      utilization: count
+    }));
+
+  if (chartData.length === 0) {
+    chartData.push(
+      { time: "08:00", utilization: 0 },
+      { time: "12:00", utilization: 0 },
+      { time: "16:00", utilization: 0 }
+    );
+  }
 
   const totalPatients = data.patients?.length || 0;
   const routedPatients =
@@ -906,13 +922,17 @@ export default function LiveTriage() {
     board?.departments.map((dept: any) => {
       const totalRooms = dept.metrics?.rooms_total || 0;
       const occupiedRooms = dept.metrics?.rooms_occupied || 0;
-      const availableRooms = Math.max(totalRooms - occupiedRooms, 0);
+      const loadPercent = totalRooms > 0 ? (occupiedRooms / totalRooms) * 100 : 0;
+      
+      let color = "var(--primary)";
+      if (loadPercent > 80) color = "#ba1a1a"; // Critical
+      else if (loadPercent > 50) color = "#f59e0b"; // Warning
 
       return {
         label: dept.name,
-        current: availableRooms,
+        current: occupiedRooms,
         total: totalRooms,
-        color: "var(--primary)",
+        color: color,
       };
     }) || [];
 
@@ -1713,7 +1733,7 @@ export default function LiveTriage() {
                       fontWeight: 700,
                     }}
                   >
-                    Clinic Capacity Utilization
+                    Patient Intake Profile
                   </h2>
                   <div style={{ height: "240px", width: "100%" }}>
                     <ResponsiveContainer width="100%" height="100%">
@@ -1754,11 +1774,10 @@ export default function LiveTriage() {
                           dy={10}
                         />
                         <YAxis
+                          allowDecimals={false}
                           axisLine={false}
                           tickLine={false}
                           tick={{ fontSize: 12, fill: "var(--text-muted)" }}
-                          domain={[0, 100]}
-                          ticks={[0, 25, 50, 75, 100]}
                         />
                         <Tooltip
                           contentStyle={{
@@ -1771,8 +1790,8 @@ export default function LiveTriage() {
                             fontWeight: 700,
                           }}
                           formatter={(value) => [
-                            `${Number(value ?? 0)}%`,
-                            "Utilization",
+                            `${Number(value ?? 0)}`,
+                            "Patients",
                           ]}
                         />
                         <Area
@@ -1916,7 +1935,7 @@ export default function LiveTriage() {
                               {item.label}
                             </span>
                             <span style={{ fontSize: 12, fontWeight: 600 }}>
-                              {item.current} available / {item.total}
+                              {item.current} occupied / {item.total}
                             </span>
                           </div>
                           <div
@@ -2402,9 +2421,9 @@ export default function LiveTriage() {
                         BLOOD PRESSURE
                       </div>
                       <div style={{ fontSize: "1.5rem", fontWeight: 700 }}>
-                        {selectedEncounter?.metadata_data?.blood_pressure ||
-                          aiSource?.vitals?.bp ||
-                          "-"}
+                        {typeof selectedEncounter?.metadata_data?.blood_pressure === 'object' 
+                          ? "-" 
+                          : (selectedEncounter?.metadata_data?.blood_pressure || aiSource?.vitals?.bp || "-")}
                       </div>
                     </div>
                     <div
@@ -2431,9 +2450,9 @@ export default function LiveTriage() {
                           color: "#ba1a1a",
                         }}
                       >
-                        {selectedEncounter?.metadata_data?.heart_rate ||
-                          aiSource?.vitals?.hr ||
-                          "-"}
+                        {typeof selectedEncounter?.metadata_data?.heart_rate === 'object'
+                          ? "-"
+                          : (selectedEncounter?.metadata_data?.heart_rate || aiSource?.vitals?.hr || "-")}
                       </div>
                     </div>
                     <div
@@ -2454,9 +2473,9 @@ export default function LiveTriage() {
                         OXYGEN SAT.
                       </div>
                       <div style={{ fontSize: "1.5rem", fontWeight: 700 }}>
-                        {selectedEncounter?.metadata_data?.oxygen_saturation ||
-                          aiSource?.vitals?.o2 ||
-                          "-"}
+                        {typeof selectedEncounter?.metadata_data?.oxygen_saturation === 'object'
+                          ? "-"
+                          : (selectedEncounter?.metadata_data?.oxygen_saturation || aiSource?.vitals?.o2 || "-")}
                       </div>
                     </div>
                   </div>
