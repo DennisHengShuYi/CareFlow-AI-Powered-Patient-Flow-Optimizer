@@ -1043,33 +1043,6 @@ export default function LiveTriage() {
                 >
                   <Users size={16} /> Patient flow
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setDashboardTab("capacity")}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.5rem",
-                    padding: "0.5rem 1rem",
-                    borderRadius: "10px",
-                    border: "none",
-                    cursor: "pointer",
-                    fontWeight: 700,
-                    fontSize: "0.875rem",
-                    background:
-                      dashboardTab === "capacity" ? "white" : "transparent",
-                    color:
-                      dashboardTab === "capacity"
-                        ? "var(--primary)"
-                        : "var(--text-muted)",
-                    boxShadow:
-                      dashboardTab === "capacity"
-                        ? "0 1px 3px rgba(0,0,0,0.08)"
-                        : "none",
-                  }}
-                >
-                  <LayoutGrid size={16} /> Capacity
-                </button>
               </div>
             )}
           </div>

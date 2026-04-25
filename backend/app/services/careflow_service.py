@@ -162,12 +162,15 @@ class CareFlowService:
         # Final sorting: Urgency first (P1 top), then Arrival/Appt time
         patient_list.sort(key=lambda x: (x["level"], x["time"]))
 
+        # Recalculate critical_count from the final list to include appointments
+        critical_count = len([p for p in patient_list if p.get("level") == 1])
+
         # Find active encounter
         active = next((p for p in patient_list if p.get("is_active")), None)
 
         return {
             "critical": critical_count,
-            "queue_active": len([p for p in patient_list if p.get("is_active")]),
+            "queue_active": len(patient_list),
             "avg_wait": "15m",
             "patients": patient_list,
             "active_encounter": active
@@ -915,6 +918,7 @@ class CareFlowService:
                 "sessions",
                 {
                     "patient_id": f"eq.{patient_id}",
+                    "hospital_id": f"eq.{hospital_id}",
                     "status": "neq.signed"
                 }
             )
