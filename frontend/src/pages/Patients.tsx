@@ -24,8 +24,8 @@ interface Case {
   id: string;
   type: string;
   department: string;
-  glStatus: 'none' | 'requested' | 'approved';
-  claimStatus: 'none' | 'requested' | 'approved';
+  glStatus: 'none' | 'requested' | 'approved' | 'rejected';
+  claimStatus: 'none' | 'requested' | 'approved' | 'rejected';
   totalBill: number;
   hasMedicalBill: boolean;
   medicalBillPrice?: number;
@@ -375,11 +375,12 @@ export default function Patients() {
 
   const selectedPatient = patients.find(p => p.id === selectedPatientId) ?? null;
 
-  const renderStatus = (status: 'none' | 'requested' | 'approved', type: 'GL' | 'Claim', p: Patient, c: Case) => {
+  const renderStatus = (status: 'none' | 'requested' | 'approved' | 'rejected', type: 'GL' | 'Claim', p: Patient, c: Case) => {
     const colors = {
       none: { bg: 'var(--neutral-400)', text: 'var(--text-muted)' },
       requested: { bg: '#FFF9C4', text: '#F9A825' },
-      approved: { bg: '#E8F5E9', text: '#2E7D32' }
+      approved: { bg: '#E8F5E9', text: '#2E7D32' },
+      rejected: { bg: '#FFEBEE', text: '#C62828' }
     };
     const current = colors[status];
 
