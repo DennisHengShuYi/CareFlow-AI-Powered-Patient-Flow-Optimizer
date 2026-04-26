@@ -1,6 +1,6 @@
-# MediRoute AI Healthcare Platform
+# CareFlow AI Healthcare Platform
 
-MediRoute is a full-stack AI-powered healthcare platform designed to optimize patient flow through multi-modal triage (text, voice, documents) and automated insurance orchestration.
+CareFlow is a full-stack AI-powered healthcare platform designed to optimize patient flow through multi-modal triage (text, voice, documents) and automated insurance orchestration.
 
 [Quality Assurance Testing.pdf](https://github.com/user-attachments/files/27091002/Quality.Assurance.Testing.pdf)
 [System Analysis Design.pdf](https://github.com/user-attachments/files/27091000/System.Analysis.Design.pdf)
@@ -148,6 +148,11 @@ VITE_SUPABASE_ANON_KEY=<your_anon_key>
 SUPABASE_SERVICE_ROLE_KEY=<your_service_key>
 ```
 
+# ================================
+# Emailing Configuration
+# ================================
+EMAIL_USER=<emailaddress>
+EMAIL_PASSWORD=<16 letter password>
 
 Additionally, create `frontend/.env` with:
 
