@@ -146,13 +146,16 @@ USE_SUPABASE=true
 VITE_SUPABASE_URL=https://<project>.supabase.co
 VITE_SUPABASE_ANON_KEY=<your_anon_key>
 SUPABASE_SERVICE_ROLE_KEY=<your_service_key>
-```
 
 # ================================
 # Emailing Configuration
 # ================================
 EMAIL_USER=<emailaddress>
 EMAIL_PASSWORD=<16 letter password>
+
+```
+
+
 
 Additionally, create `frontend/.env` with:
 
