@@ -97,8 +97,9 @@ Copy the template below into a file named `.env` in the **project root** (not in
 # ================================
 # Database — Supabase
 # ================================
-DATABASE_URL=postgresql+asyncpg://<user>:<password>@<host>:5432/postgres
-DATABASE_URL_DIRECT=postgresql+asyncpg://<user>:<password>@<host>:5432/postgres
+DATABASE_URL=postgresql+asyncpg://postgres:1tzM0ZzSOS3oicsB@db.guiimyubbbrnzmzncetx.supabase.co:5432/postgres
+
+DATABASE_URL_DIRECT=postgresql+asyncpg://postgres:1tzM0ZzSOS3oicsB@db.guiimyubbbrnzmzncetx.supabase.co:5432/postgres
 
 # ================================
 # LLM Providers (Multi-Agent)
@@ -143,9 +144,9 @@ CLERK_JWKS_URL=
 # Supabase Configuration
 # ================================
 USE_SUPABASE=true
-VITE_SUPABASE_URL=https://<project>.supabase.co
-VITE_SUPABASE_ANON_KEY=<your_anon_key>
-SUPABASE_SERVICE_ROLE_KEY=<your_service_key>
+VITE_SUPABASE_URL=https://guiimyubbbrnzmzncetx.supabase.co
+VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd1aWlteXViYmJybnptem5jZXR4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY1OTU1MzksImV4cCI6MjA5MjE3MTUzOX0.KiPc0HjSQ1IYi3s01_9CInYqK0nqsXecFtVaKAtJcFA
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd1aWlteXViYmJybnptem5jZXR4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NjU5NTUzOSwiZXhwIjoyMDkyMTcxNTM5fQ.VMZsU11B5H4fozYGpVef7cZFMIgispcyH0svjXh8q6U
 
 # ================================
 # Emailing Configuration
@@ -157,13 +158,6 @@ EMAIL_PASSWORD=<16 letter password>
 
 
 
-Additionally, create `frontend/.env` with:
-
-```env
-VITE_CLERK_PUBLISHABLE_KEY=pk_test_<your_clerk_publishable_key>
-VITE_SUPABASE_URL=https://<project>.supabase.co
-VITE_SUPABASE_ANON_KEY=<your_supabase_anon_key>
-```
 
 ---
 
