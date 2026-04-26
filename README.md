@@ -141,6 +141,8 @@ USE_SUPABASE=true
 VITE_SUPABASE_URL=https://<project>.supabase.co
 VITE_SUPABASE_ANON_KEY=<your_anon_key>
 SUPABASE_SERVICE_ROLE_KEY=<your_service_key>
+EMAIL_USER=<your email>
+EMAIL_PASSWORD=<16 character password>
 ```
 
 
